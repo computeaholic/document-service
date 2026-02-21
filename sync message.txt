@@ -1,0 +1,223 @@
+🔁 ULTRA-DENSE SYNC — REPO 1: document-service
+
+Mission:
+Build a senior-caliber, production-realistic backend service that demonstrates:
+- Explicit state modeling
+- Transaction discipline
+- Optimistic concurrency control
+- Idempotent create behavior
+- Deterministic error mapping
+- Clean architectural boundaries
+- Operational maturity
+- Mechanical CI discipline
+
+This is NOT a demo.
+This is NOT a platform.
+This is NOT scalable architecture cosplay.
+
+This is a constrained, finished, enterprise-safe service.
+
+---
+
+Repo Name:
+document-service
+
+Stack (inherits Backend Stack Profile v1.0):
+- Python 3.12 (pinned)
+- FastAPI
+- Pydantic v2
+- SQLAlchemy 2.x (declarative only)
+- PostgreSQL (Docker)
+- Alembic
+- pytest (80–85% coverage)
+- ruff / black / mypy
+- GitHub Actions CI
+- Dockerfile (pinned base image, no latest)
+- docker-compose
+- Required Make targets
+
+All constraints frozen unless justified.
+
+---
+
+Domain Concept:
+Controlled document approval workflow.
+
+One entity:
+Document
+
+Fields:
+- id (UUID)
+- title
+- content
+- status (enum)
+- version (int for optimistic locking)
+- created_at
+- updated_at
+
+---
+
+Valid States:
+- draft
+- submitted
+- approved (terminal)
+- rejected (terminal)
+
+Valid Transitions:
+draft → submitted (content must be non-empty)
+submitted → approved
+submitted → rejected
+
+Illegal transitions:
+- approved → anything
+- rejected → anything
+- draft → approved
+- draft → rejected
+
+Illegal transitions raise explicit domain exceptions.
+Illegal transitions must be tested.
+
+---
+
+Endpoints:
+
+POST   /documents              → create draft (idempotent via idempotency key)
+GET    /documents/{id}         → retrieve
+PUT    /documents/{id}         → update draft (optimistic lock)
+POST   /documents/{id}/submit  → submit
+POST   /documents/{id}/approve → approve
+POST   /documents/{id}/reject  → reject
+
+Error envelope required:
+{
+  "error": {
+    "code": "machine_identifier",
+    "message": "human readable"
+  }
+}
+
+No raw exceptions returned.
+
+---
+
+Concurrency Model:
+- Optimistic locking via version column
+- Version mismatch returns 409
+- IntegrityError mapped deterministically
+- Duplicate idempotency key returns 409
+- Concurrency tests required
+
+---
+
+Transaction Model:
+All mutations use:
+with session.begin():
+
+No implicit commits.
+No hidden side effects.
+Multi-step state changes atomic.
+
+---
+
+Failure Matrix (must be explicitly modeled):
+- Invalid input → 422
+- Not found → 404
+- Illegal transition → 400
+- Duplicate submission → 409
+- Concurrency conflict → 409
+- Database unavailable → 503
+- Timeout → 504
+- Partial transaction → deterministic rollback
+- Dependency failure (if applicable)
+
+All failures defined in table form.
+All tests derive from failure matrix.
+
+---
+
+Observability:
+- Structured logging only
+- Errors logged once
+- No secrets logged
+- Health endpoint checks DB connectivity
+- Readiness fails if DB unreachable
+
+---
+
+Out of Scope (explicit):
+- Authentication
+- RBAC
+- Audit logs
+- Notifications
+- Background jobs
+- Caching
+- Horizontal scaling
+- Event sourcing
+- Search
+- Pagination
+
+No scope expansion allowed after freeze.
+
+---
+
+Complexity Budget:
+- Max 6 endpoints
+- 1 domain entity
+- 1 state machine
+- No background processes
+- 3 abstraction layers max
+- ~2.5–3.2k LOC natural target (not forced)
+
+Exceeding budget requires Spec Pack update.
+
+---
+
+Testing Requirements:
+- Unit tests for state transitions
+- Unit tests for invariants
+- Integration tests for endpoints
+- Concurrency test for version mismatch
+- Migration test
+- 80–85% coverage
+- CI must fail on lint/type/test failure
+
+---
+
+Definition of Done:
+- Spec Pack complete
+- Scope frozen (date stamped)
+- Constraints frozen
+- Failure matrix complete
+- State model complete
+- Concurrency model defined
+- Migrations working (upgrade + downgrade)
+- Tests passing
+- CI green
+- No TODO placeholders
+- Interview Defense doc written
+
+---
+
+Hiring Signal Objective:
+This repo must signal:
+- Deterministic thinking
+- Failure-first design
+- Transactional discipline
+- Concurrency awareness
+- Constraint control
+- Operational maturity
+- No ego
+- No over-engineering
+
+We build clean.
+We build bounded.
+We finish.
+
+Proceed by:
+1. Filling SPEC_PACK fully.
+2. Freezing scope.
+3. Only then implementing /src.
+
+No drift.
+No expansion.
+No velocity trap.
