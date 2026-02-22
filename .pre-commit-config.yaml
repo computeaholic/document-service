@@ -15,10 +15,22 @@ repos:
     hooks:
       - id: mypy
 
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.8
+    hooks:
+      - id: bandit
+        args: ["-q"]
+
+  - repo: https://github.com/trufflesecurity/trufflehog
+    rev: v3.63.2
+    hooks:
+      - id: trufflehog
+        args: ["--fail"]
+
   - repo: local
     hooks:
-      - id: no-direct-main-commit
-        name: prevent direct commit to main
-        entry: bash -c 'if [[ "$(git rev-parse --abbrev-ref HEAD)" == "main" ]]; then echo "Direct commits to main are prohibited."; exit 1; fi'
+      - id: block-main-branch
+        name: Block commits to main
+        entry: bash -c 'if [[ "$(git rev-parse --abbrev-ref HEAD)" == "main" ]]; then echo "🚫 Direct commits to main are blocked."; exit 1; fi'
         language: system
         stages: [commit]
