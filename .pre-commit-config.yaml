@@ -1,0 +1,24 @@
+repos:
+  - repo: https://github.com/psf/black
+    rev: 24.3.0
+    hooks:
+      - id: black
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.4
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.0
+    hooks:
+      - id: mypy
+
+  - repo: local
+    hooks:
+      - id: no-direct-main-commit
+        name: prevent direct commit to main
+        entry: bash -c 'if [[ "$(git rev-parse --abbrev-ref HEAD)" == "main" ]]; then echo "Direct commits to main are prohibited."; exit 1; fi'
+        language: system
+        stages: [commit]
