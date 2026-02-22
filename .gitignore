@@ -43,5 +43,4 @@ docker-compose.override.yml
 # Node
 node_modules/
 
-# Ignore project-spec-template backups
-project-spec-template/
+# (removed obsolete template backup entry)

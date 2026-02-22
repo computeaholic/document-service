@@ -21,6 +21,7 @@ Database unavailable	Infrastructure layer (connection failure)	db_unavailable	50
 Timeout (request processing)	API boundary (middleware/gateway)	timeout	504	ERROR	Retry with backoff	N/A
 Partial transaction failure	Service layer (inside transaction)	Deterministic mapped error	400/409/500	ERROR	Depends on error	Atomic rollback
 Unexpected internal exception	API boundary exception handler	internal_error	500	ERROR	Retry only if safe	N/A
+Unexpected exception	API boundary	internal_error	500	ERROR	Retry: Depends	N/A
 Missing Idempotency-Key header (create)	Validation layer	validation_error	422	INFO	No retry	N/A
 Missing If-Match header (mutation)	Validation layer	validation_error	422	INFO	No retry	N/A
 Submit with empty content	Domain layer	illegal_transition	400	INFO	No retry	N/A

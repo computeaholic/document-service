@@ -16,11 +16,7 @@ v1.0
 
 Freeze Date:
 2026-02-21
-
-Git Commit Hash:
-<REPLACE_WITH_COMMIT_HASH_AFTER_DOCS_COMMIT>
-
-(Replace with git rev-parse HEAD after committing all spec artifacts.)
+Git Commit Hash: TO_BE_FILLED_AT_FREEZE_COMMIT
 
 2. Frozen Artifacts
 

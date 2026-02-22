@@ -1,7 +1,7 @@
 Interview Defense — document-service
 1. Design Intent
 
-document-service manages a single Document entity through a constrained approval workflow (draft → submitted → approved/rejected). The system is responsible for enforcing state legality, preventing lost updates, and ensuring atomic mutations under concurrent access. The primary invariant protected is that no illegal state transition or partial mutation may persist. The most important design decision was enforcing optimistic concurrency via explicit version matching combined with mandatory transaction boundaries. The system is intentionally narrow to isolate correctness, failure modeling, and transactional discipline.
+document-service manages a single Document entity through a constrained approval workflow (draft → submitted → approved/rejected). The system is responsible for enforcing state legality, preventing lost updates without expanding transaction scope, and ensuring atomic mutations under concurrent access. The primary invariant protected is that no illegal state transition or partial mutation may persist. The most important design decision was enforcing optimistic concurrency via explicit version matching combined with mandatory transaction boundaries. The system is intentionally narrow to isolate correctness, failure modeling, and transactional discipline.
 
 2. What This Project Demonstrates
 
@@ -32,7 +32,9 @@ Dedicated idempotency table	Unique constraints only	Cannot detect payload mismat
 No background jobs	Async queue/outbox	Adds operational and failure complexity	No async extensibility
 No authentication	JWT/OAuth	Not core to state discipline signal	Not production-secure
 No list endpoint	Pagination/filtering	Adds query complexity unrelated to workflow	Cannot browse dataset
+
 Deterministic error envelope	Framework defaults	Inconsistent error shapes	Custom exception mapping layer
+Fixed workflow (hardcoded state machine)	Configurable state engine	Adds abstraction and surface area unrelated to hiring signal	Reduced extensibility
 
 These are intentional boundary decisions.
 
@@ -51,7 +53,7 @@ Mitigation:
 Add read replica for GET endpoints; increase connection pool; optimize indexes if list endpoint introduced.
 
 First extraction boundary:
-Extract idempotency and workflow logic into reusable internal module if multiple entities introduced.
+Extract workflow logic into a separate bounded service if additional stateful entities are introduced.
 
 Stable components at 10x:
 

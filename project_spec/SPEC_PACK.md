@@ -84,6 +84,7 @@ Bulk operations
 3.1 Entities
 Entity	Purpose	Owner	Persistence	Notes
 Document	Business object representing a document moving through a fixed approval workflow	Service	PostgreSQL (single table)	Uses optimistic version column; terminal states are immutable
+IdempotencyKey	Infrastructure table for idempotency keys	Infrastructure	PostgreSQL (single table)	Not a business entity; supports idempotent create
 3.2 Invariants
 
 id is globally unique (UUID).

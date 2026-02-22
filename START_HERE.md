@@ -54,14 +54,6 @@ Clarity precedes implementation.
 
 3. Canonical Document Map (Authoritative)
 
-Derived projects may either:
-
-Maintain STATE_MODEL.md, TESTING.md, and OPERATIONS.md as separate files, OR
-
-Embed those sections inside SPEC_PACK.md.
-
-The chosen structure must be explicitly declared in FREEZE.md.
-
 The authoritative documentation spine is:
 
 START_HERE.md
@@ -77,13 +69,13 @@ FREEZE.md
 
 Important:
 
-State model → SPEC_PACK.md §4 (or STATE_MODEL.md if separated)
+State model → SPEC_PACK.md §4
 
-Testing strategy → SPEC_PACK.md §12 (or TESTING.md if separated)
+Testing strategy → SPEC_PACK.md §12
 
-Operational considerations → SPEC_PACK.md §14 (or OPERATIONS.md if separated)
+Operational considerations → SPEC_PACK.md §14
 
-Either flat files at repository root or a grouped layout under `/project_spec/` are allowed. Specification artifacts may be grouped under /project_spec/ to reduce repository root clutter. START_HERE.md must remain at repository root.
+Specification artifacts may be grouped under /project_spec/ to reduce repository root clutter. START_HERE.md must remain at repository root.
 
 4. Scope Guard
 
