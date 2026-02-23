@@ -62,6 +62,13 @@ No silent stack changes.
 
 No tool swapping during implementation phase.
 
+Dependency Declaration
+
+All dependencies (runtime and dev) are declared in pyproject.toml. No secondary dependency files are permitted.
+
+Coverage threshold is enforced at 80% in CI via:
+pytest --cov=src --cov-report=term-missing --cov-fail-under=80
+
 2. Dependency Rules
 General Rules
 
@@ -385,3 +392,12 @@ Violation requires correction before further implementation.
 No drift.
 No silent expansion.
 No velocity trap.
+
+## Versioning Policy
+
+This repository follows semantic versioning.
+
+- `0.x.y` indicates pre-production but structurally governed releases.
+- `0.1.0` marks the completion of Phase 1 (domain + governance spine).
+- Version increments must correspond to meaningful architectural or behavioral changes.
+- Version changes are explicit and intentional — no placeholder versions.

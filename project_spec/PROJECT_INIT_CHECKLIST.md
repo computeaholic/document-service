@@ -46,6 +46,8 @@ Tradeoffs: ./TRADEOFFS.md
 
  Constraints frozen in CONSTRAINTS.md
 
+ Dependencies declared in pyproject.toml (no secondary dependency files)
+
  Dependency direction rules acknowledged (CONSTRAINTS.md + CONVENTIONS.md)
 
  Makefile targets declared (must exist in Makefile with required targets)

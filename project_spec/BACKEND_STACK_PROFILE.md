@@ -128,6 +128,10 @@ CI blocks on lint/type/test failure
 
 No direct pushes to main
 
+Dependency Policy
+
+All dependencies (runtime and dev) are declared in pyproject.toml. No secondary dependency files are permitted.
+
 9. CI
 
 GitHub Actions
