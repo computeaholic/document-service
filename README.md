@@ -351,3 +351,12 @@ GitHub Actions workflow enforces:
 ## Governance
 
 This repository is under **FREEZE** governance. See [FREEZE.md](FREEZE.md) for scope boundaries and architectural rules.
+
+## Release Integrity
+
+- Release: `v1.0.0`
+- Commit: `d7be00d`
+- Coverage: `98.5%`
+- Migrations: verified (upgrade/downgrade cycle)
+- Pre-commit hooks: green (`black`, `ruff`, `mypy`, `bandit`, `trufflehog`)
+- CI: passing
