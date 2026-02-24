@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 from fastapi import Depends, FastAPI, Header, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy import literal, select
+from sqlalchemy import text
 
 from application.services import DocumentService
 from infrastructure.database import get_session_factory
@@ -574,7 +574,7 @@ def create_app() -> FastAPI:
         try:
             session_factory = get_session_factory()
             with session_factory() as session:
-                session.execute(select(literal(1)))
+                session.execute(text("SELECT 1 FROM documents LIMIT 1"))
             return {"status": "ready"}
         except Exception:
             request_id = getattr(request.state, "request_id", "unknown")
