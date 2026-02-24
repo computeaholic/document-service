@@ -2,10 +2,10 @@
 
 import json
 import logging
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, Header, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import literal, select
 
@@ -78,7 +78,7 @@ def create_app() -> FastAPI:
             }
         )
         
-        return response
+        return cast(Response, response)
 
     # Create repository once at app startup for consistent state
     repository = InMemoryDocumentRepository()

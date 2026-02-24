@@ -5,10 +5,7 @@ import json
 from typing import Any
 from uuid import uuid4
 
-from fastapi import Request, Response
-from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.exc import IntegrityError
 
 from infrastructure.models import IdempotencyKeyModel
 
