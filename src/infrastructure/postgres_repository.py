@@ -3,7 +3,7 @@
 from typing import Iterable
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from application.repositories import DocumentRepository
@@ -27,18 +27,40 @@ class PostgresDocumentRepository(DocumentRepository):
 
         Args:
             document: Document to add
+
+        Note:
+            For updates, this method enforces optimistic concurrency at the
+            database level by checking version in the WHERE clause. This provides
+            defense-in-depth alongside application-layer version validation.
         """
         with self._session_factory() as session:
             with session.begin():
                 existing = session.get(DocumentModel, document.id)
                 if existing is not None:
-                    # Update existing document
-                    existing.title = document.title
-                    existing.content = document.content
-                    existing.status = document.status.value
-                    existing.version = document.version
-                    existing.created_at = document.created_at
-                    existing.updated_at = document.updated_at
+                    # Update existing document with version check
+                    # Defense-in-depth: Application layer already validated version,
+                    # but we enforce it at DB level to prevent race conditions
+                    expected_version = document.version - 1
+                    
+                    result = session.execute(
+                        update(DocumentModel)
+                        .where(DocumentModel.id == document.id)
+                        .where(DocumentModel.version == expected_version)
+                        .values(
+                            title=document.title,
+                            content=document.content,
+                            status=document.status.value,
+                            version=document.version,
+                            updated_at=document.updated_at,
+                        )
+                    )
+                    
+                    if result.rowcount == 0:
+                        # Version mismatch or document disappeared
+                        # Application layer should have caught this, but defensive check
+                        raise ValueError(
+                            f"Concurrent modification detected for document {document.id}"
+                        )
                 else:
                     # Create new document
                     model = DocumentModel(

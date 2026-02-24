@@ -1,9 +1,10 @@
-.PHONY: help install test lint format type check clean run up down migrate rollback
+.PHONY: help install test test-integration lint format type check clean run up down migrate rollback
 
 help:
 	@echo "Available targets:"
 	@echo "  install  - Install project with dev dependencies"
 	@echo "  test     - Run tests with coverage enforcement"
+	@echo "  test-integration - Run integration tests against Dockerized Postgres"
 	@echo "  lint     - Run ruff"
 	@echo "  format   - Run black"
 	@echo "  type     - Run mypy"
@@ -21,6 +22,11 @@ install:
 
 test:
 	pytest --cov=src --cov-report=term-missing --cov-fail-under=80
+
+test-integration:
+	docker-compose up -d
+	pytest -m integration
+	docker-compose down
 
 lint:
 	ruff check src

@@ -479,3 +479,54 @@ def test_request_id_appears_in_logs(capsys: pytest.CaptureFixture[str]) -> None:
     
     # Verify request_id appears in log output
     assert "request_id" in captured.out, f"No request_id found in logs:\n{captured.out}"
+
+
+def test_error_logged_once_with_request_id(capsys: pytest.CaptureFixture[str]) -> None:
+    """Test that errors are logged exactly once at API boundary with request_id."""
+    import json
+    
+    app = create_app()
+    client = TestClient(app)
+    
+    # Create document
+    response = client.post(
+        "/documents",
+        json={"title": "Test Doc", "content": "Test content"},
+    )
+    assert response.status_code == 201
+    doc_id = response.json()["id"]
+    
+    # Clear captured output
+    capsys.readouterr()
+    
+    # Trigger ValidationError (empty title after trim)
+    update_response = client.post(
+        "/documents",
+        json={"title": "  ", "content": "Content"},
+    )
+    assert update_response.status_code == 422
+    
+    # Capture logs
+    captured = capsys.readouterr()
+    
+    # Parse log lines
+    log_lines = [line for line in captured.out.strip().split("\n") if line]
+    error_logs = []
+    
+    for line in log_lines:
+        try:
+            log_entry = json.loads(line)
+            if log_entry.get("level") == "WARNING" and "VALIDATION_ERROR" in str(log_entry):
+                error_logs.append(log_entry)
+        except json.JSONDecodeError:
+            pass
+    
+    # Should have exactly one error log
+    assert len(error_logs) == 1, f"Expected 1 error log, found {len(error_logs)}: {error_logs}"
+    
+    # Verify required fields
+    error_log = error_logs[0]
+    assert "request_id" in error_log, "request_id missing from error log"
+    assert "error_code" in error_log, "error_code missing from error log"
+    assert error_log["error_code"] == "VALIDATION_ERROR"
+

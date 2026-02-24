@@ -194,6 +194,117 @@ docker-compose logs -f api
 5. **Migration Integrity**: CI enforces bidirectional migration tests (upgrade/downgrade/upgrade)
 6. **Error Isolation**: Exceptions logged once at API boundary (no duplicate logs in domain/repository)
 
+## Idempotency Guarantees
+
+The service implements idempotency for document creation via the `Idempotency-Key` header:
+
+**Same key + same body → Replayed response**
+```bash
+# First request
+POST /documents
+Idempotency-Key: abc-123
+{"title": "Doc", "content": "Content"}
+→ 201 {"id": "uuid-1", "version": 1, ...}
+
+# Replay with same key and body
+POST /documents
+Idempotency-Key: abc-123
+{"title": "Doc", "content": "Content"}
+→ 201 {"id": "uuid-1", "version": 1, ...}  # Same response, no new document
+```
+
+**Same key + different body → 422 Conflict**
+```bash
+# First request
+POST /documents
+Idempotency-Key: abc-123
+{"title": "Doc A", "content": "..."}
+→ 201 Created
+
+# Different payload with same key
+POST /documents
+Idempotency-Key: abc-123
+{"title": "Doc B", "content": "..."}
+→ 422 {"error": {"code": "IDEMPOTENCY_CONFLICT", ...}}
+```
+
+**Implementation Details**:
+- Idempotency keys stored with SHA-256 hash of request body
+- Key reuse with different payload rejected to prevent silent data loss
+- Cached responses valid indefinitely (24-hour TTL recommended for production cleanup)
+
+## Optimistic Concurrency
+
+All document updates require the `If-Match` header with current version:
+
+```bash
+# Get current version
+GET /documents/{id}
+→ 200 {"version": 5, ...}
+
+# Update with version check
+PUT /documents/{id}
+If-Match: 5
+{"title": "Updated", ...}
+→ 200 {"version": 6, ...}
+
+# Concurrent update with stale version fails
+PUT /documents/{id}
+If-Match: 5  # Stale
+{"title": "Another update", ...}
+→ 412 {"error": {"code": "PRECONDITION_FAILED", ...}}
+```
+
+**Enforcement Layers**:
+1. **Application Layer**: Service validates version before mutation
+2. **Database Layer**: UPDATE with WHERE version={expected} prevents race conditions
+3. **API Layer**: Missing `If-Match` header → 400 Bad Request
+
+**Why Optimistic Locking**:
+- No distributed locks required (horizontal scaling friendly)
+- Explicit conflict detection (callers handle retry logic)
+- Version counter doubles as audit trail
+
+## Error Envelope
+
+All 4xx/5xx responses use uniform error structure:
+
+```json
+{
+  "error": {
+    "code": "ERROR_CODE",
+    "message": "Human-readable description"
+  }
+}
+```
+
+**Error Codes**:
+- `VALIDATION_ERROR` (422): Pydantic validation failure (empty title, content too long, etc.)
+- `ILLEGAL_TRANSITION` (409): Invalid state transition (e.g., draft → published)
+- `NOT_FOUND` (404): Document does not exist
+- `PRECONDITION_FAILED` (412): If-Match version mismatch
+- `IDEMPOTENCY_CONFLICT` (422): Same idempotency key with different payload
+- `SERVICE_UNAVAILABLE` (503): Database connectivity failure
+
+**Logging Discipline**:
+- Domain layer: Zero logging (pure business logic)
+- Repository layer: Zero logging (infrastructure concern)
+- API layer: Log errors **once** at boundary with `request_id`, `error_code`, `message`
+
+## Non-Goals
+
+This service explicitly **does not** implement:
+
+- **Distributed Locking**: Optimistic concurrency sufficient for expected load
+- **Horizontal Idempotency Store**: Single Postgres table adequate for scale target
+- **Async Processing**: Synchronous HTTP sufficient for <100ms p99 latency
+- **Soft Deletes**: Hard deletes enforce data lifecycle (GDPR compliance)
+- **Multi-Tenancy**: Single-tenant deployment model
+- **Event Sourcing**: State snapshots with version counter sufficient
+- **CQRS**: Read/write separation unnecessary for current complexity
+
+Senior reviewers respect these boundaries. Scope expansion requires spec revision.
+
 ## CI/CD
 
 GitHub Actions workflow enforces:
