@@ -1,5 +1,6 @@
 """Postgres-backed document repository implementation."""
 
+from datetime import datetime, timezone
 from typing import Iterable
 from uuid import UUID
 
@@ -41,7 +42,7 @@ class PostgresDocumentRepository(DocumentRepository):
                     # Defense-in-depth: Application layer already validated version,
                     # but we enforce it at DB level to prevent race conditions
                     expected_version = document.version - 1
-                    
+
                     result = session.execute(
                         update(DocumentModel)
                         .where(DocumentModel.id == document.id)
@@ -54,7 +55,7 @@ class PostgresDocumentRepository(DocumentRepository):
                             updated_at=document.updated_at,
                         )
                     )
-                    
+
                     if result.rowcount == 0:
                         # Version mismatch or document disappeared
                         # Application layer should have caught this, but defensive check
@@ -119,5 +120,5 @@ class PostgresDocumentRepository(DocumentRepository):
         doc.version = model.version
         doc.created_at = model.created_at
         doc.updated_at = model.updated_at
-        doc.clock = lambda: model.updated_at
+        doc.clock = lambda: datetime.now(timezone.utc)
         return doc

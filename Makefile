@@ -43,7 +43,7 @@ clean:
 	rm -rf build dist *.egg-info .pytest_cache .mypy_cache .coverage
 
 run:
-	uvicorn api.app:app --reload
+	uvicorn api.app:app --reload --no-access-log
 
 up:
 	docker-compose up -d

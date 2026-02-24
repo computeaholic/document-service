@@ -17,6 +17,7 @@ def test_create_document_returns_201_with_id_and_status() -> None:
     response = client.post(
         "/documents",
         json={"title": "Test", "content": "Body"},
+        headers={"Idempotency-Key": "test-create-1"},
     )
 
     assert response.status_code == 201
@@ -32,6 +33,7 @@ def test_create_document_with_valid_title_and_content() -> None:
     response = client.post(
         "/documents",
         json={"title": "My Document", "content": "Content here"},
+        headers={"Idempotency-Key": "test-create-2"},
     )
 
     assert response.status_code == 201
@@ -47,37 +49,42 @@ def test_create_document_with_empty_title_returns_422() -> None:
     response = client.post(
         "/documents",
         json={"title": "", "content": "Body"},
+        headers={"Idempotency-Key": "test-create-3"},
     )
 
     assert response.status_code == 422
-    assert "detail" in response.json()
+    data = response.json()
+    assert "error" in data
+    assert data["error"]["code"] == "validation_error"
 
 
-def test_create_document_with_whitespace_title_returns_400() -> None:
-    """Test POST /documents with whitespace-only title returns 400 (domain validation)."""
+def test_create_document_with_whitespace_title_returns_422() -> None:
+    """Test POST /documents with whitespace-only title returns 422 (domain validation)."""
     app = create_app()
     client = TestClient(app)
     response = client.post(
         "/documents",
         json={"title": "   ", "content": "Body"},
+        headers={"Idempotency-Key": "test-create-4"},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 422
     data = response.json()
     assert "error" in data
-    assert data["error"]["code"] == "VALIDATION_ERROR"
+    assert data["error"]["code"] == "validation_error"
 
 
-def test_create_document_with_empty_content_returns_422() -> None:
-    """Test POST /documents with empty content returns 422 (Pydantic validation)."""
+def test_create_document_with_empty_content_returns_201() -> None:
+    """Test POST /documents with empty content returns 201 (allowed)."""
     app = create_app()
     client = TestClient(app)
     response = client.post(
         "/documents",
         json={"title": "Title", "content": ""},
+        headers={"Idempotency-Key": "test-create-5"},
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 201
 
 
 def test_get_document_returns_200_with_full_document() -> None:
@@ -87,6 +94,7 @@ def test_get_document_returns_200_with_full_document() -> None:
     create_response = client.post(
         "/documents",
         json={"title": "Test", "content": "Body"},
+        headers={"Idempotency-Key": "test-create-6"},
     )
     assert create_response.status_code == 201
     doc_id = create_response.json()["id"]
@@ -112,7 +120,7 @@ def test_get_nonexistent_document_returns_404() -> None:
     assert response.status_code == 404
     data = response.json()
     assert "error" in data
-    assert data["error"]["code"] == "NOT_FOUND"
+    assert data["error"]["code"] == "not_found"
 
 
 def test_create_and_retrieve_document_flow() -> None:
@@ -122,6 +130,7 @@ def test_create_and_retrieve_document_flow() -> None:
     create_response = client.post(
         "/documents",
         json={"title": "Workflow", "content": "Test content"},
+        headers={"Idempotency-Key": "test-create-7"},
     )
     assert create_response.status_code == 201
     doc_id = create_response.json()["id"]
@@ -141,6 +150,7 @@ def test_response_schema_includes_all_fields() -> None:
     response = client.post(
         "/documents",
         json={"title": "Test", "content": "Content"},
+        headers={"Idempotency-Key": "test-create-8"},
     )
 
     data = response.json()
@@ -160,6 +170,7 @@ def test_update_document_returns_200_with_incremented_version() -> None:
     create_response = client.post(
         "/documents",
         json={"title": "Original", "content": "Original content"},
+        headers={"Idempotency-Key": "test-create-9"},
     )
     doc_id = create_response.json()["id"]
 
@@ -176,13 +187,14 @@ def test_update_document_returns_200_with_incremented_version() -> None:
     assert data["version"] == 1
 
 
-def test_update_document_with_version_mismatch_returns_400() -> None:
-    """Test PUT /documents/{doc_id} with wrong version returns 400."""
+def test_update_document_with_version_mismatch_returns_409() -> None:
+    """Test PUT /documents/{doc_id} with wrong version returns 409."""
     app = create_app()
     client = TestClient(app)
     create_response = client.post(
         "/documents",
         json={"title": "Original", "content": "Original content"},
+        headers={"Idempotency-Key": "test-create-10"},
     )
     doc_id = create_response.json()["id"]
 
@@ -192,10 +204,10 @@ def test_update_document_with_version_mismatch_returns_400() -> None:
         headers={"If-Match": "99"},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     data = response.json()
     assert "error" in data
-    assert data["error"]["code"] == "VERSION_MISMATCH"
+    assert data["error"]["code"] == "version_conflict"
 
 
 def test_update_document_without_if_match_returns_422() -> None:
@@ -205,6 +217,7 @@ def test_update_document_without_if_match_returns_422() -> None:
     create_response = client.post(
         "/documents",
         json={"title": "Original", "content": "Original content"},
+        headers={"Idempotency-Key": "test-create-11"},
     )
     doc_id = create_response.json()["id"]
 
@@ -214,6 +227,9 @@ def test_update_document_without_if_match_returns_422() -> None:
     )
 
     assert response.status_code == 422
+    data = response.json()
+    assert "error" in data
+    assert data["error"]["code"] == "validation_error"
 
 
 def test_update_nonexistent_document_returns_404() -> None:
@@ -238,6 +254,7 @@ def test_submit_document_returns_200_with_submitted_status() -> None:
     create_response = client.post(
         "/documents",
         json={"title": "Test", "content": "Body"},
+        headers={"Idempotency-Key": "test-create-12"},
     )
     doc_id = create_response.json()["id"]
 
@@ -259,6 +276,7 @@ def test_submit_then_approve_returns_approved_status() -> None:
     create_response = client.post(
         "/documents",
         json={"title": "Test", "content": "Body"},
+        headers={"Idempotency-Key": "test-create-13"},
     )
     doc_id = create_response.json()["id"]
 
@@ -281,6 +299,7 @@ def test_submit_twice_returns_400_illegal_transition() -> None:
     create_response = client.post(
         "/documents",
         json={"title": "Test", "content": "Body"},
+        headers={"Idempotency-Key": "test-create-14"},
     )
     doc_id = create_response.json()["id"]
 
@@ -293,7 +312,7 @@ def test_submit_twice_returns_400_illegal_transition() -> None:
     assert conflict_response.status_code == 400
     data = conflict_response.json()
     assert "error" in data
-    assert data["error"]["code"] == "ILLEGAL_TRANSITION"
+    assert data["error"]["code"] == "illegal_transition"
 
 
 def test_approve_draft_returns_400_illegal_transition() -> None:
@@ -303,6 +322,7 @@ def test_approve_draft_returns_400_illegal_transition() -> None:
     create_response = client.post(
         "/documents",
         json={"title": "Test", "content": "Body"},
+        headers={"Idempotency-Key": "test-create-15"},
     )
     doc_id = create_response.json()["id"]
 
@@ -314,7 +334,7 @@ def test_approve_draft_returns_400_illegal_transition() -> None:
     assert conflict_response.status_code == 400
     data = conflict_response.json()
     assert "error" in data
-    assert data["error"]["code"] == "ILLEGAL_TRANSITION"
+    assert data["error"]["code"] == "illegal_transition"
 
 
 def test_submit_nonexistent_document_returns_404() -> None:
@@ -338,6 +358,7 @@ def test_submit_then_reject_returns_rejected_status() -> None:
     create_response = client.post(
         "/documents",
         json={"title": "Test", "content": "Body"},
+        headers={"Idempotency-Key": "test-create-16"},
     )
     doc_id = create_response.json()["id"]
 
@@ -382,7 +403,7 @@ def test_approve_nonexistent_document_returns_404() -> None:
 
 
 def test_repository_isolation_between_app_instances() -> None:
-    """Test repository isolation across app instances."""
+    """Test repository consistency across app instances."""
     app1 = create_app()
     client1 = TestClient(app1)
 
@@ -392,12 +413,15 @@ def test_repository_isolation_between_app_instances() -> None:
     response = client1.post(
         "/documents",
         json={"title": "A", "content": "B"},
+        headers={"Idempotency-Key": "test-create-17"},
     )
     doc_id = response.json()["id"]
 
     response2 = client2.get(f"/documents/{doc_id}")
 
-    assert response2.status_code == 404
+    assert response2.status_code == 200
+    data = response2.json()
+    assert data["id"] == doc_id
 
 
 def test_health_endpoint_returns_ok() -> None:
@@ -450,8 +474,8 @@ def test_readiness_endpoint_returns_503_on_failure(
     def fake_get_session_factory() -> Callable[[], object]:
         raise RuntimeError("db down")
 
-    monkeypatch.setattr("api.app.get_session_factory", fake_get_session_factory)
     app = create_app()
+    monkeypatch.setattr("api.app.get_session_factory", fake_get_session_factory)
     client = TestClient(app)
 
     response = client.get("/health/ready")
@@ -459,24 +483,25 @@ def test_readiness_endpoint_returns_503_on_failure(
     assert response.status_code == 503
     data = response.json()
     assert "error" in data
-    assert data["error"]["code"] == "SERVICE_UNAVAILABLE"
+    assert data["error"]["code"] == "db_unavailable"
 
 
 def test_request_id_appears_in_logs(capsys: pytest.CaptureFixture[str]) -> None:
     """Test that every request gets a unique request_id logged."""
     app = create_app()
     client = TestClient(app)
-    
+
     response = client.post(
         "/documents",
         json={"title": "Test", "content": "Body"},
+        headers={"Idempotency-Key": "test-create-18"},
     )
-    
+
     assert response.status_code == 201
-    
+
     # Capture stdout/stderr
     captured = capsys.readouterr()
-    
+
     # Verify request_id appears in log output
     assert "request_id" in captured.out, f"No request_id found in logs:\n{captured.out}"
 
@@ -484,49 +509,52 @@ def test_request_id_appears_in_logs(capsys: pytest.CaptureFixture[str]) -> None:
 def test_error_logged_once_with_request_id(capsys: pytest.CaptureFixture[str]) -> None:
     """Test that errors are logged exactly once at API boundary with request_id."""
     import json
-    
+
     app = create_app()
     client = TestClient(app)
-    
+
     # Create document
     response = client.post(
         "/documents",
         json={"title": "Test Doc", "content": "Test content"},
+        headers={"Idempotency-Key": "test-create-19"},
     )
     assert response.status_code == 201
-    doc_id = response.json()["id"]
-    
+
     # Clear captured output
     capsys.readouterr()
-    
+
     # Trigger ValidationError (empty title after trim)
     update_response = client.post(
         "/documents",
         json={"title": "  ", "content": "Content"},
+        headers={"Idempotency-Key": "test-create-20"},
     )
     assert update_response.status_code == 422
-    
+
     # Capture logs
     captured = capsys.readouterr()
-    
+
     # Parse log lines
     log_lines = [line for line in captured.out.strip().split("\n") if line]
     error_logs = []
-    
+
     for line in log_lines:
         try:
             log_entry = json.loads(line)
-            if log_entry.get("level") == "WARNING" and "VALIDATION_ERROR" in str(log_entry):
+            if log_entry.get("error_code") == "validation_error":
                 error_logs.append(log_entry)
         except json.JSONDecodeError:
             pass
-    
+
     # Should have exactly one error log
-    assert len(error_logs) == 1, f"Expected 1 error log, found {len(error_logs)}: {error_logs}"
-    
+    assert (
+        len(error_logs) == 1
+    ), f"Expected 1 error log, found {len(error_logs)}: {error_logs}"
+
     # Verify required fields
     error_log = error_logs[0]
     assert "request_id" in error_log, "request_id missing from error log"
     assert "error_code" in error_log, "error_code missing from error log"
-    assert error_log["error_code"] == "VALIDATION_ERROR"
-
+    assert error_log["error_code"] == "validation_error"
+    assert error_log["status_code"] == 422

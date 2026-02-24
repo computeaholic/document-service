@@ -8,8 +8,8 @@ from alembic import context
 # Import application models and config
 from config import Settings
 from infrastructure.database import Base
+
 # Import models to ensure they're registered with Base.metadata
-from infrastructure.models import DocumentModel, IdempotencyKeyModel
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -74,9 +74,7 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=target_metadata
-        )
+        context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():
             context.run_migrations()

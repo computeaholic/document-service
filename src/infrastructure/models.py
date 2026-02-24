@@ -25,7 +25,10 @@ class DocumentModel(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
 
@@ -35,7 +38,9 @@ class IdempotencyKeyModel(Base):
     __tablename__ = "idempotency_keys"
 
     id: Mapped[PyUUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
-    key: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    key: Mapped[str] = mapped_column(
+        String(128), nullable=False, unique=True, index=True
+    )
     request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     response_body: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

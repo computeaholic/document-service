@@ -11,9 +11,9 @@ Production-grade REST API for document lifecycle management with strict concurre
 - **API**: FastAPI HTTP interface with error envelope, middleware, OpenAPI
 
 **Key Components**:
-- **Error Envelope**: Uniform `{"error": {"code": "...", "message": "...", "details": {...}}}` across all 4xx/5xx responses
+- **Error Envelope**: Uniform `{"error": {"code": "...", "message": "..."}}` across all 4xx/5xx responses
 - **Concurrency Control**: Optimistic locking via `If-Match` header (required for PUT)
-- **Idempotency**: `Idempotency-Key` header support on POST with 24-hour key expiration
+- **Idempotency**: `Idempotency-Key` header required on POST
 - **Structured Logging**: JSON logs with `request_id`, `method`, `path`, `status_code`, `error_code`
 - **Health Endpoints**: `/health/live` (always 200), `/health/ready` (validates DB connection)
 
@@ -21,16 +21,16 @@ Production-grade REST API for document lifecycle management with strict concurre
 
 ### Document States
 ```
-draft → review → published
-         ↓
-      archived
+draft → submitted → approved
+     ↓
+  rejected
 ```
 
 **Immutable Rules**:
-- `draft` can transition to `review` or `archived`
-- `review` can transition to `published` or `archived`
-- `published` can only transition to `archived`
-- `archived` is terminal (no transitions allowed)
+- `draft` can transition to `submitted`
+- `submitted` can transition to `approved` or `rejected`
+- `approved` is terminal (no transitions allowed)
+- `rejected` is terminal (no transitions allowed)
 
 ### Endpoints
 
@@ -39,7 +39,7 @@ draft → review → published
 ```json
 {
   "title": "string (1-200 chars)",
-  "content": "string (1-10000 chars)"
+  "content": "string (0-20000 chars)"
 }
 ```
 **Response** (201):
@@ -49,7 +49,7 @@ draft → review → published
   "title": "string",
   "content": "string",
   "status": "draft",
-  "version": 1,
+  "version": 0,
   "created_at": "ISO8601",
   "updated_at": "ISO8601"
 }
@@ -63,7 +63,7 @@ draft → review → published
   "id": "uuid",
   "title": "string",
   "content": "string",
-  "status": "draft|review|published|archived",
+  "status": "draft|submitted|approved|rejected",
   "version": 1,
   "created_at": "ISO8601",
   "updated_at": "ISO8601"
@@ -78,26 +78,61 @@ draft → review → published
 ```json
 {
   "title": "string (1-200 chars)",
-  "content": "string (1-10000 chars)",
-  "status": "draft|review|published|archived"
+  "content": "string (0-20000 chars)"
 }
 ```
 **Response** (200): Same as GET
 
 **Errors**:
-- `412 PRECONDITION_FAILED`: If-Match version mismatch (concurrent modification)
-- `422 VALIDATION_ERROR`: Invalid field values
-- `409 ILLEGAL_TRANSITION`: Invalid state transition
+- `409 version_conflict`: If-Match version mismatch (concurrent modification)
+- `422 validation_error`: Invalid field values
+- `400 illegal_transition`: Invalid state transition
 
-#### DELETE /documents/{id}
-**Response** (204): No content
+#### POST /documents/{id}/submit
+Transitions a document from `draft` → `submitted`.
+
+**Headers** (REQUIRED):
+- `If-Match: <version>`
+
+**Response** (200): Same as GET
+
+**Errors**:
+- `409 version_conflict`
+- `422 validation_error` (content must be non-empty on submit)
+- `400 illegal_transition`
+
+#### POST /documents/{id}/approve
+Transitions a document from `submitted` → `approved`.
+
+**Headers** (REQUIRED):
+- `If-Match: <version>`
+
+**Response** (200): Same as GET
+
+**Errors**:
+- `409 version_conflict`
+- `400 illegal_transition`
+
+#### POST /documents/{id}/reject
+Transitions a document from `submitted` → `rejected`.
+
+**Headers** (REQUIRED):
+- `If-Match: <version>`
+
+**Response** (200): Same as GET
+
+**Errors**:
+- `409 version_conflict`
+- `400 illegal_transition`
 
 ### Error Codes
-- `VALIDATION_ERROR` (422): Pydantic validation failure
-- `ILLEGAL_TRANSITION` (409): Invalid document state transition
-- `NOT_FOUND` (404): Document does not exist
-- `PRECONDITION_FAILED` (412): If-Match version conflict
-- `SERVICE_UNAVAILABLE` (503): Database connectivity failure
+- `validation_error` (422): Pydantic validation failure
+- `illegal_transition` (400): Invalid document state transition
+- `not_found` (404): Document does not exist
+- `version_conflict` (409): If-Match version conflict
+- `idempotency_key_conflict` (409): Same idempotency key with different payload
+- `db_conflict` (409): Database constraint conflict
+- `db_unavailable` (503): Database connectivity failure
 
 ## Local Development
 
@@ -213,7 +248,7 @@ Idempotency-Key: abc-123
 → 201 {"id": "uuid-1", "version": 1, ...}  # Same response, no new document
 ```
 
-**Same key + different body → 422 Conflict**
+**Same key + different body → 409 Conflict**
 ```bash
 # First request
 POST /documents
@@ -225,7 +260,7 @@ Idempotency-Key: abc-123
 POST /documents
 Idempotency-Key: abc-123
 {"title": "Doc B", "content": "..."}
-→ 422 {"error": {"code": "IDEMPOTENCY_CONFLICT", ...}}
+→ 409 {"error": {"code": "idempotency_key_conflict", ...}}
 ```
 
 **Implementation Details**:
@@ -252,13 +287,13 @@ If-Match: 5
 PUT /documents/{id}
 If-Match: 5  # Stale
 {"title": "Another update", ...}
-→ 412 {"error": {"code": "PRECONDITION_FAILED", ...}}
+→ 409 {"error": {"code": "version_conflict", ...}}
 ```
 
 **Enforcement Layers**:
 1. **Application Layer**: Service validates version before mutation
 2. **Database Layer**: UPDATE with WHERE version={expected} prevents race conditions
-3. **API Layer**: Missing `If-Match` header → 400 Bad Request
+3. **API Layer**: Missing `If-Match` header → 422 validation_error
 
 **Why Optimistic Locking**:
 - No distributed locks required (horizontal scaling friendly)
@@ -279,12 +314,12 @@ All 4xx/5xx responses use uniform error structure:
 ```
 
 **Error Codes**:
-- `VALIDATION_ERROR` (422): Pydantic validation failure (empty title, content too long, etc.)
-- `ILLEGAL_TRANSITION` (409): Invalid state transition (e.g., draft → published)
-- `NOT_FOUND` (404): Document does not exist
-- `PRECONDITION_FAILED` (412): If-Match version mismatch
-- `IDEMPOTENCY_CONFLICT` (422): Same idempotency key with different payload
-- `SERVICE_UNAVAILABLE` (503): Database connectivity failure
+- `validation_error` (422): Pydantic validation failure (empty title, content too long, etc.)
+- `illegal_transition` (400): Invalid state transition (e.g., draft → approved)
+- `not_found` (404): Document does not exist
+- `version_conflict` (409): If-Match version mismatch
+- `idempotency_key_conflict` (409): Same idempotency key with different payload
+- `db_unavailable` (503): Database connectivity failure
 
 **Logging Discipline**:
 - Domain layer: Zero logging (pure business logic)

@@ -6,12 +6,13 @@ from typing import Annotated, Any, cast
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Header, Request, Response, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import literal, select
 
 from application.services import DocumentService
 from infrastructure.database import get_session_factory
-from infrastructure.memory_repository import InMemoryDocumentRepository
+from infrastructure.postgres_repository import PostgresDocumentRepository
 from domain import IllegalTransitionError, ValidationError
 from config import Settings
 from .logging_config import configure_logging
@@ -56,39 +57,36 @@ def create_app() -> FastAPI:
         """Add request_id to each request for tracing."""
         request_id = str(uuid4())
         request.state.request_id = request_id
-        
-        # Create logger adapter with request_id
-        logger_with_context = logging.LoggerAdapter(
-            logger,
-            {
-                "request_id": request_id,
-                "method": request.method,
-                "path": request.url.path,
-            }
-        )
-        request.state.logger = logger_with_context
-        
+
+        base_extra = {
+            "request_id": request_id,
+            "method": request.method,
+            "path": request.url.path,
+        }
+        request.state.log_extra = base_extra
+
         response = await call_next(request)
-        
-        # Log response with structured fields
-        logger_with_context.info(
+
+        # Log response completion with required fields
+        logger.info(
             "Request completed",
             extra={
+                **base_extra,
                 "status_code": response.status_code,
-            }
+            },
         )
-        
+
         return cast(Response, response)
 
     # Create repository once at app startup for consistent state
-    repository = InMemoryDocumentRepository()
+    repository = PostgresDocumentRepository(get_session_factory())
 
-    def get_repository() -> InMemoryDocumentRepository:
-        """Provide InMemoryDocumentRepository (same instance per app)."""
+    def get_repository() -> PostgresDocumentRepository:
+        """Provide PostgresDocumentRepository (same instance per app)."""
         return repository
 
     def get_service(
-        repository: Annotated[InMemoryDocumentRepository, Depends(get_repository)],
+        repository: Annotated[PostgresDocumentRepository, Depends(get_repository)],
     ) -> DocumentService:
         """Provide DocumentService with injected repository."""
         return DocumentService(repository)
@@ -100,19 +98,43 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         """Handle validation errors."""
         request_id = getattr(request.state, "request_id", "unknown")
-        logger.warning(
+        logger.info(
             "Validation error",
             extra={
                 "request_id": request_id,
-                "error_code": "VALIDATION_ERROR",
+                "error_code": "validation_error",
                 "error_message": str(exc),
+                "status_code": status.HTTP_422_UNPROCESSABLE_ENTITY,
                 "method": request.method,
                 "path": request.url.path,
-            }
+            },
         )
         return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content=error_response("VALIDATION_ERROR", str(exc)),
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content=error_response("validation_error", str(exc)),
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_exception_handler(
+        request: Request,
+        exc: RequestValidationError,
+    ) -> JSONResponse:
+        """Handle request validation errors from FastAPI/Pydantic."""
+        request_id = getattr(request.state, "request_id", "unknown")
+        logger.info(
+            "Request validation error",
+            extra={
+                "request_id": request_id,
+                "error_code": "validation_error",
+                "error_message": str(exc),
+                "status_code": status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "method": request.method,
+                "path": request.url.path,
+            },
+        )
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content=error_response("validation_error", "Invalid request"),
         )
 
     @app.exception_handler(IllegalTransitionError)
@@ -122,19 +144,20 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         """Handle illegal state transition errors."""
         request_id = getattr(request.state, "request_id", "unknown")
-        logger.warning(
+        logger.info(
             "Illegal transition",
             extra={
                 "request_id": request_id,
-                "error_code": "ILLEGAL_TRANSITION",
+                "error_code": "illegal_transition",
                 "error_message": str(exc),
+                "status_code": status.HTTP_400_BAD_REQUEST,
                 "method": request.method,
                 "path": request.url.path,
-            }
+            },
         )
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content=error_response("ILLEGAL_TRANSITION", str(exc)),
+            content=error_response("illegal_transition", str(exc)),
         )
 
     @app.post(
@@ -143,8 +166,9 @@ def create_app() -> FastAPI:
         status_code=status.HTTP_201_CREATED,
     )
     def create_document(
+        request: Request,
         payload: CreateDocumentRequest,
-        idempotency_key: Annotated[str | None, Header(min_length=1, max_length=128)] = None,
+        idempotency_key: Annotated[str, Header(min_length=1, max_length=128)],
         service: DocumentService = Depends(get_service),
     ) -> DocumentResponse | JSONResponse:
         """Create a new document.
@@ -161,47 +185,78 @@ def create_app() -> FastAPI:
             ValidationError: If title or content validation fails
             HTTPException: 400 if idempotency key conflict with different request body
         """
-        # Check idempotency if key provided (tests may skip this)
-        if idempotency_key is not None:
-            request_body = {"title": payload.title, "content": payload.content}
-            try:
-                is_duplicate, stored_response = check_idempotency(
-                    idempotency_key, request_body, get_session_factory()
-                )
+        # Check idempotency key (required)
+        request_body = {"title": payload.title, "content": payload.content}
+        try:
+            is_duplicate, stored_response = check_idempotency(
+                idempotency_key, request_body, get_session_factory()
+            )
 
-                if is_duplicate:
-                    if stored_response is not None:
-                        # Same key, same hash → return stored response
-                        return JSONResponse(
-                            status_code=status.HTTP_201_CREATED,
-                            content=json.loads(stored_response),
-                        )
-                    else:
-                        # Same key, different hash → conflict
-                        return JSONResponse(
-                            status_code=status.HTTP_400_BAD_REQUEST,
-                            content=error_response(
-                                "IDEMPOTENCY_KEY_CONFLICT",
-                                "Idempotency key already used with different request body",
-                            ),
-                        )
-            except Exception:
-                # Idempotency check failed (e.g., DB unavailable in test mode), proceed anyway
-                pass
+            if is_duplicate:
+                if stored_response is not None:
+                    # Same key, same hash → return stored response
+                    return JSONResponse(
+                        status_code=status.HTTP_201_CREATED,
+                        content=json.loads(stored_response),
+                    )
+                else:
+                    # Same key, different hash → conflict
+                    request_id = getattr(request.state, "request_id", "unknown")
+                    logger.info(
+                        "Idempotency key conflict",
+                        extra={
+                            "request_id": request_id,
+                            "error_code": "idempotency_key_conflict",
+                            "status_code": status.HTTP_409_CONFLICT,
+                            "method": request.method,
+                            "path": request.url.path,
+                        },
+                    )
+                    return JSONResponse(
+                        status_code=status.HTTP_409_CONFLICT,
+                        content=error_response(
+                            "idempotency_key_conflict",
+                            "Idempotency key already used with different request body",
+                        ),
+                    )
+        except Exception:
+            # Idempotency check failed (e.g., DB unavailable in test mode), proceed anyway
+            base_extra = getattr(request.state, "log_extra", {})
+            logger.warning(
+                "Idempotency check failed; proceeding without cached response",
+                exc_info=True,
+                extra=base_extra,
+            )
 
         # Execute request
         doc = service.create(title=payload.title, content=payload.content)
-        logger.info("Document created", extra={"document_id": str(doc.id)})
+        base_extra = getattr(request.state, "log_extra", {})
+        logger.info(
+            "Document created",
+            extra={
+                **base_extra,
+                "status_code": status.HTTP_201_CREATED,
+                "document_id": str(doc.id),
+            },
+        )
         response = DocumentResponse.model_validate(doc)
 
         # Store idempotency record if key provided
-        if idempotency_key is not None:
-            response_dict = response.model_dump(mode="json")
-            try:
-                store_idempotency(idempotency_key, request_body, response_dict, get_session_factory())
-            except Exception:
-                # Failed to store idempotency record (test mode), log and continue
-                logger.warning("Failed to store idempotency record")
+        response_dict = response.model_dump(mode="json")
+        try:
+            store_idempotency(
+                idempotency_key, request_body, response_dict, get_session_factory()
+            )
+        except Exception:
+            # Failed to store idempotency record (test mode), log and continue
+            base_extra = getattr(request.state, "log_extra", {})
+            logger.warning(
+                "Failed to store idempotency record",
+                extra={
+                    **base_extra,
+                    "status_code": status.HTTP_201_CREATED,
+                },
+            )
 
         return response
 
@@ -210,6 +265,7 @@ def create_app() -> FastAPI:
         response_model=None,
     )
     def get_document(
+        request: Request,
         doc_id: UUID,
         service: DocumentService = Depends(get_service),
     ) -> DocumentResponse | JSONResponse:
@@ -229,9 +285,20 @@ def create_app() -> FastAPI:
             doc = service.get(doc_id)
             return DocumentResponse.model_validate(doc)
         except KeyError:
+            request_id = getattr(request.state, "request_id", "unknown")
+            logger.info(
+                "Not found",
+                extra={
+                    "request_id": request_id,
+                    "error_code": "not_found",
+                    "status_code": status.HTTP_404_NOT_FOUND,
+                    "method": request.method,
+                    "path": request.url.path,
+                },
+            )
             return JSONResponse(
                 status_code=status.HTTP_404_NOT_FOUND,
-                content=error_response("NOT_FOUND", "Document not found"),
+                content=error_response("not_found", "Document not found"),
             )
 
     @app.put(
@@ -239,6 +306,7 @@ def create_app() -> FastAPI:
         response_model=None,
     )
     def update_document(
+        request: Request,
         doc_id: UUID,
         payload: UpdateDocumentRequest,
         if_match: Annotated[int, Header()],
@@ -262,10 +330,21 @@ def create_app() -> FastAPI:
         try:
             doc = service.get(doc_id)
             if doc.version != if_match:
+                request_id = getattr(request.state, "request_id", "unknown")
+                logger.info(
+                    "Version conflict",
+                    extra={
+                        "request_id": request_id,
+                        "error_code": "version_conflict",
+                        "status_code": status.HTTP_409_CONFLICT,
+                        "method": request.method,
+                        "path": request.url.path,
+                    },
+                )
                 return JSONResponse(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=status.HTTP_409_CONFLICT,
                     content=error_response(
-                        "VERSION_MISMATCH",
+                        "version_conflict",
                         f"Expected version {if_match}, but document is at version {doc.version}",
                     ),
                 )
@@ -273,9 +352,20 @@ def create_app() -> FastAPI:
             doc = service.get(doc_id)
             return DocumentResponse.model_validate(doc)
         except KeyError:
+            request_id = getattr(request.state, "request_id", "unknown")
+            logger.info(
+                "Not found",
+                extra={
+                    "request_id": request_id,
+                    "error_code": "not_found",
+                    "status_code": status.HTTP_404_NOT_FOUND,
+                    "method": request.method,
+                    "path": request.url.path,
+                },
+            )
             return JSONResponse(
                 status_code=status.HTTP_404_NOT_FOUND,
-                content=error_response("NOT_FOUND", "Document not found"),
+                content=error_response("not_found", "Document not found"),
             )
 
     @app.post(
@@ -283,6 +373,7 @@ def create_app() -> FastAPI:
         response_model=None,
     )
     def submit_document(
+        request: Request,
         doc_id: UUID,
         if_match: Annotated[int, Header()],
         service: DocumentService = Depends(get_service),
@@ -304,10 +395,21 @@ def create_app() -> FastAPI:
         try:
             doc = service.get(doc_id)
             if doc.version != if_match:
+                request_id = getattr(request.state, "request_id", "unknown")
+                logger.info(
+                    "Version conflict",
+                    extra={
+                        "request_id": request_id,
+                        "error_code": "version_conflict",
+                        "status_code": status.HTTP_409_CONFLICT,
+                        "method": request.method,
+                        "path": request.url.path,
+                    },
+                )
                 return JSONResponse(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=status.HTTP_409_CONFLICT,
                     content=error_response(
-                        "VERSION_MISMATCH",
+                        "version_conflict",
                         f"Expected version {if_match}, but document is at version {doc.version}",
                     ),
                 )
@@ -315,9 +417,20 @@ def create_app() -> FastAPI:
             doc = service.get(doc_id)
             return DocumentResponse.model_validate(doc)
         except KeyError:
+            request_id = getattr(request.state, "request_id", "unknown")
+            logger.info(
+                "Not found",
+                extra={
+                    "request_id": request_id,
+                    "error_code": "not_found",
+                    "status_code": status.HTTP_404_NOT_FOUND,
+                    "method": request.method,
+                    "path": request.url.path,
+                },
+            )
             return JSONResponse(
                 status_code=status.HTTP_404_NOT_FOUND,
-                content=error_response("NOT_FOUND", "Document not found"),
+                content=error_response("not_found", "Document not found"),
             )
 
     @app.post(
@@ -325,6 +438,7 @@ def create_app() -> FastAPI:
         response_model=None,
     )
     def approve_document(
+        request: Request,
         doc_id: UUID,
         if_match: Annotated[int, Header()],
         service: DocumentService = Depends(get_service),
@@ -346,10 +460,21 @@ def create_app() -> FastAPI:
         try:
             doc = service.get(doc_id)
             if doc.version != if_match:
+                request_id = getattr(request.state, "request_id", "unknown")
+                logger.info(
+                    "Version conflict",
+                    extra={
+                        "request_id": request_id,
+                        "error_code": "version_conflict",
+                        "status_code": status.HTTP_409_CONFLICT,
+                        "method": request.method,
+                        "path": request.url.path,
+                    },
+                )
                 return JSONResponse(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=status.HTTP_409_CONFLICT,
                     content=error_response(
-                        "VERSION_MISMATCH",
+                        "version_conflict",
                         f"Expected version {if_match}, but document is at version {doc.version}",
                     ),
                 )
@@ -357,9 +482,20 @@ def create_app() -> FastAPI:
             doc = service.get(doc_id)
             return DocumentResponse.model_validate(doc)
         except KeyError:
+            request_id = getattr(request.state, "request_id", "unknown")
+            logger.info(
+                "Not found",
+                extra={
+                    "request_id": request_id,
+                    "error_code": "not_found",
+                    "status_code": status.HTTP_404_NOT_FOUND,
+                    "method": request.method,
+                    "path": request.url.path,
+                },
+            )
             return JSONResponse(
                 status_code=status.HTTP_404_NOT_FOUND,
-                content=error_response("NOT_FOUND", "Document not found"),
+                content=error_response("not_found", "Document not found"),
             )
 
     @app.post(
@@ -367,6 +503,7 @@ def create_app() -> FastAPI:
         response_model=None,
     )
     def reject_document(
+        request: Request,
         doc_id: UUID,
         if_match: Annotated[int, Header()],
         service: DocumentService = Depends(get_service),
@@ -388,10 +525,21 @@ def create_app() -> FastAPI:
         try:
             doc = service.get(doc_id)
             if doc.version != if_match:
+                request_id = getattr(request.state, "request_id", "unknown")
+                logger.info(
+                    "Version conflict",
+                    extra={
+                        "request_id": request_id,
+                        "error_code": "version_conflict",
+                        "status_code": status.HTTP_409_CONFLICT,
+                        "method": request.method,
+                        "path": request.url.path,
+                    },
+                )
                 return JSONResponse(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=status.HTTP_409_CONFLICT,
                     content=error_response(
-                        "VERSION_MISMATCH",
+                        "version_conflict",
                         f"Expected version {if_match}, but document is at version {doc.version}",
                     ),
                 )
@@ -399,9 +547,20 @@ def create_app() -> FastAPI:
             doc = service.get(doc_id)
             return DocumentResponse.model_validate(doc)
         except KeyError:
+            request_id = getattr(request.state, "request_id", "unknown")
+            logger.info(
+                "Not found",
+                extra={
+                    "request_id": request_id,
+                    "error_code": "not_found",
+                    "status_code": status.HTTP_404_NOT_FOUND,
+                    "method": request.method,
+                    "path": request.url.path,
+                },
+            )
             return JSONResponse(
                 status_code=status.HTTP_404_NOT_FOUND,
-                content=error_response("NOT_FOUND", "Document not found"),
+                content=error_response("not_found", "Document not found"),
             )
 
     @app.get("/health/live")
@@ -410,7 +569,7 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/health/ready", response_model=None)
-    def readiness() -> dict[str, str] | JSONResponse:
+    def readiness(request: Request) -> dict[str, str] | JSONResponse:
         """Readiness check endpoint."""
         try:
             session_factory = get_session_factory()
@@ -418,9 +577,20 @@ def create_app() -> FastAPI:
                 session.execute(select(literal(1)))
             return {"status": "ready"}
         except Exception:
+            request_id = getattr(request.state, "request_id", "unknown")
+            logger.info(
+                "Database unavailable",
+                extra={
+                    "request_id": request_id,
+                    "error_code": "db_unavailable",
+                    "status_code": status.HTTP_503_SERVICE_UNAVAILABLE,
+                    "method": request.method,
+                    "path": request.url.path,
+                },
+            )
             return JSONResponse(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                content=error_response("SERVICE_UNAVAILABLE", "Database unavailable"),
+                content=error_response("db_unavailable", "Database unavailable"),
             )
 
     return app

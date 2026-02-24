@@ -19,14 +19,14 @@ class CreateDocumentRequest(BaseModel):
     """Request schema for creating a document."""
 
     title: str = Field(min_length=1, max_length=200)
-    content: str = Field(min_length=1)
+    content: str = Field(min_length=0, max_length=20000)
 
 
 class UpdateDocumentRequest(BaseModel):
     """Request schema for updating a document."""
 
     title: str = Field(min_length=1, max_length=200)
-    content: str = Field(min_length=1)
+    content: str = Field(min_length=0, max_length=20000)
 
 
 class DocumentResponse(BaseModel):
