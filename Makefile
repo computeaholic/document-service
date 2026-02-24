@@ -1,4 +1,4 @@
-.PHONY: help install test lint format type check clean
+.PHONY: help install test lint format type check clean run up down migrate rollback
 
 help:
 	@echo "Available targets:"
@@ -9,6 +9,11 @@ help:
 	@echo "  type     - Run mypy"
 	@echo "  check    - Run lint + type + test"
 	@echo "  clean    - Remove build artifacts"
+	@echo "  run      - Run local development server"
+	@echo "  up       - Start docker-compose services"
+	@echo "  down     - Stop docker-compose services"
+	@echo "  migrate  - Run database migrations (upgrade to head)"
+	@echo "  rollback - Rollback last database migration"
 
 install:
 	pip install --upgrade pip
@@ -30,3 +35,18 @@ check: lint type test
 
 clean:
 	rm -rf build dist *.egg-info .pytest_cache .mypy_cache .coverage
+
+run:
+	uvicorn api.app:app --reload
+
+up:
+	docker-compose up -d
+
+down:
+	docker-compose down
+
+migrate:
+	alembic upgrade head
+
+rollback:
+	alembic downgrade -1

@@ -37,6 +37,21 @@ jobs:
           pip install --upgrade pip
           pip install .[dev]
 
+      - name: Run migrations up
+        env:
+          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/documents
+        run: alembic upgrade head
+
+      - name: Run migrations down
+        env:
+          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/documents
+        run: alembic downgrade base
+
+      - name: Run migrations up again
+        env:
+          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/documents
+        run: alembic upgrade head
+
       - name: Run pre-commit hooks
         run: pre-commit run --all-files
 

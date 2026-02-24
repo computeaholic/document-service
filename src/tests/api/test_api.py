@@ -3,6 +3,7 @@
 from types import TracebackType
 from typing import Callable
 
+import pytest
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
 
@@ -62,7 +63,9 @@ def test_create_document_with_whitespace_title_returns_400() -> None:
     )
 
     assert response.status_code == 400
-    assert "detail" in response.json()
+    data = response.json()
+    assert "error" in data
+    assert data["error"]["code"] == "VALIDATION_ERROR"
 
 
 def test_create_document_with_empty_content_returns_422() -> None:
@@ -107,7 +110,9 @@ def test_get_nonexistent_document_returns_404() -> None:
     response = client.get(f"/documents/{fake_id}")
 
     assert response.status_code == 404
-    assert "detail" in response.json()
+    data = response.json()
+    assert "error" in data
+    assert data["error"]["code"] == "NOT_FOUND"
 
 
 def test_create_and_retrieve_document_flow() -> None:
@@ -144,6 +149,86 @@ def test_response_schema_includes_all_fields() -> None:
     assert "content" in data
     assert "status" in data
     assert "version" in data
+    assert "created_at" in data
+    assert "updated_at" in data
+
+
+def test_update_document_returns_200_with_incremented_version() -> None:
+    """Test PUT /documents/{doc_id} updates and increments version."""
+    app = create_app()
+    client = TestClient(app)
+    create_response = client.post(
+        "/documents",
+        json={"title": "Original", "content": "Original content"},
+    )
+    doc_id = create_response.json()["id"]
+
+    update_response = client.put(
+        f"/documents/{doc_id}",
+        json={"title": "Updated", "content": "Updated content"},
+        headers={"If-Match": "0"},
+    )
+
+    assert update_response.status_code == 200
+    data = update_response.json()
+    assert data["title"] == "Updated"
+    assert data["content"] == "Updated content"
+    assert data["version"] == 1
+
+
+def test_update_document_with_version_mismatch_returns_400() -> None:
+    """Test PUT /documents/{doc_id} with wrong version returns 400."""
+    app = create_app()
+    client = TestClient(app)
+    create_response = client.post(
+        "/documents",
+        json={"title": "Original", "content": "Original content"},
+    )
+    doc_id = create_response.json()["id"]
+
+    response = client.put(
+        f"/documents/{doc_id}",
+        json={"title": "Updated", "content": "Updated content"},
+        headers={"If-Match": "99"},
+    )
+
+    assert response.status_code == 400
+    data = response.json()
+    assert "error" in data
+    assert data["error"]["code"] == "VERSION_MISMATCH"
+
+
+def test_update_document_without_if_match_returns_422() -> None:
+    """Test PUT /documents/{doc_id} without If-Match header returns 422."""
+    app = create_app()
+    client = TestClient(app)
+    create_response = client.post(
+        "/documents",
+        json={"title": "Original", "content": "Original content"},
+    )
+    doc_id = create_response.json()["id"]
+
+    response = client.put(
+        f"/documents/{doc_id}",
+        json={"title": "Updated", "content": "Updated content"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_update_nonexistent_document_returns_404() -> None:
+    """Test PUT /documents/{doc_id} with nonexistent ID returns 404."""
+    app = create_app()
+    client = TestClient(app)
+    fake_id = "00000000-0000-0000-0000-000000000000"
+
+    response = client.put(
+        f"/documents/{fake_id}",
+        json={"title": "Title", "content": "Content"},
+        headers={"If-Match": "0"},
+    )
+
+    assert response.status_code == 404
 
 
 def test_submit_document_returns_200_with_submitted_status() -> None:
@@ -156,7 +241,10 @@ def test_submit_document_returns_200_with_submitted_status() -> None:
     )
     doc_id = create_response.json()["id"]
 
-    submit_response = client.post(f"/documents/{doc_id}/submit")
+    submit_response = client.post(
+        f"/documents/{doc_id}/submit",
+        headers={"If-Match": "0"},
+    )
 
     assert submit_response.status_code == 200
     data = submit_response.json()
@@ -174,8 +262,11 @@ def test_submit_then_approve_returns_approved_status() -> None:
     )
     doc_id = create_response.json()["id"]
 
-    client.post(f"/documents/{doc_id}/submit")
-    approve_response = client.post(f"/documents/{doc_id}/approve")
+    client.post(f"/documents/{doc_id}/submit", headers={"If-Match": "0"})
+    approve_response = client.post(
+        f"/documents/{doc_id}/approve",
+        headers={"If-Match": "1"},
+    )
 
     assert approve_response.status_code == 200
     data = approve_response.json()
@@ -183,8 +274,8 @@ def test_submit_then_approve_returns_approved_status() -> None:
     assert data["version"] == 2
 
 
-def test_submit_twice_returns_409_conflict() -> None:
-    """Test submitting twice returns 409 conflict."""
+def test_submit_twice_returns_400_illegal_transition() -> None:
+    """Test submitting twice returns 400 illegal transition."""
     app = create_app()
     client = TestClient(app)
     create_response = client.post(
@@ -193,15 +284,20 @@ def test_submit_twice_returns_409_conflict() -> None:
     )
     doc_id = create_response.json()["id"]
 
-    client.post(f"/documents/{doc_id}/submit")
-    conflict_response = client.post(f"/documents/{doc_id}/submit")
+    client.post(f"/documents/{doc_id}/submit", headers={"If-Match": "0"})
+    conflict_response = client.post(
+        f"/documents/{doc_id}/submit",
+        headers={"If-Match": "1"},
+    )
 
-    assert conflict_response.status_code == 409
-    assert "detail" in conflict_response.json()
+    assert conflict_response.status_code == 400
+    data = conflict_response.json()
+    assert "error" in data
+    assert data["error"]["code"] == "ILLEGAL_TRANSITION"
 
 
-def test_approve_draft_returns_409_conflict() -> None:
-    """Test approving a draft document returns 409 conflict."""
+def test_approve_draft_returns_400_illegal_transition() -> None:
+    """Test approving a draft document returns 400 illegal transition."""
     app = create_app()
     client = TestClient(app)
     create_response = client.post(
@@ -210,10 +306,15 @@ def test_approve_draft_returns_409_conflict() -> None:
     )
     doc_id = create_response.json()["id"]
 
-    conflict_response = client.post(f"/documents/{doc_id}/approve")
+    conflict_response = client.post(
+        f"/documents/{doc_id}/approve",
+        headers={"If-Match": "0"},
+    )
 
-    assert conflict_response.status_code == 409
-    assert "detail" in conflict_response.json()
+    assert conflict_response.status_code == 400
+    data = conflict_response.json()
+    assert "error" in data
+    assert data["error"]["code"] == "ILLEGAL_TRANSITION"
 
 
 def test_submit_nonexistent_document_returns_404() -> None:
@@ -222,7 +323,10 @@ def test_submit_nonexistent_document_returns_404() -> None:
     client = TestClient(app)
     fake_id = "00000000-0000-0000-0000-000000000000"
 
-    response = client.post(f"/documents/{fake_id}/submit")
+    response = client.post(
+        f"/documents/{fake_id}/submit",
+        headers={"If-Match": "0"},
+    )
 
     assert response.status_code == 404
 
@@ -237,8 +341,11 @@ def test_submit_then_reject_returns_rejected_status() -> None:
     )
     doc_id = create_response.json()["id"]
 
-    client.post(f"/documents/{doc_id}/submit")
-    reject_response = client.post(f"/documents/{doc_id}/reject")
+    client.post(f"/documents/{doc_id}/submit", headers={"If-Match": "0"})
+    reject_response = client.post(
+        f"/documents/{doc_id}/reject",
+        headers={"If-Match": "1"},
+    )
 
     assert reject_response.status_code == 200
     data = reject_response.json()
@@ -252,7 +359,10 @@ def test_reject_nonexistent_document_returns_404() -> None:
     client = TestClient(app)
     fake_id = "00000000-0000-0000-0000-000000000000"
 
-    response = client.post(f"/documents/{fake_id}/reject")
+    response = client.post(
+        f"/documents/{fake_id}/reject",
+        headers={"If-Match": "0"},
+    )
 
     assert response.status_code == 404
 
@@ -263,7 +373,10 @@ def test_approve_nonexistent_document_returns_404() -> None:
     client = TestClient(app)
     fake_id = "00000000-0000-0000-0000-000000000000"
 
-    response = client.post(f"/documents/{fake_id}/approve")
+    response = client.post(
+        f"/documents/{fake_id}/approve",
+        headers={"If-Match": "0"},
+    )
 
     assert response.status_code == 404
 
@@ -288,18 +401,18 @@ def test_repository_isolation_between_app_instances() -> None:
 
 
 def test_health_endpoint_returns_ok() -> None:
-    """Test /health returns ok status."""
+    """Test /health/live returns ok status."""
     app = create_app()
     client = TestClient(app)
 
-    response = client.get("/health")
+    response = client.get("/health/live")
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
 
 def test_readiness_endpoint_returns_ready(monkeypatch: MonkeyPatch) -> None:
-    """Test /ready returns ready when database is available."""
+    """Test /health/ready returns ready when database is available."""
 
     class DummySession:
         def __enter__(self) -> "DummySession":
@@ -323,7 +436,7 @@ def test_readiness_endpoint_returns_ready(monkeypatch: MonkeyPatch) -> None:
     app = create_app()
     client = TestClient(app)
 
-    response = client.get("/ready")
+    response = client.get("/health/ready")
 
     assert response.status_code == 200
     assert response.json() == {"status": "ready"}
@@ -332,7 +445,7 @@ def test_readiness_endpoint_returns_ready(monkeypatch: MonkeyPatch) -> None:
 def test_readiness_endpoint_returns_503_on_failure(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """Test /ready returns 503 when database is unavailable."""
+    """Test /health/ready returns 503 when database is unavailable."""
 
     def fake_get_session_factory() -> Callable[[], object]:
         raise RuntimeError("db down")
@@ -341,7 +454,28 @@ def test_readiness_endpoint_returns_503_on_failure(
     app = create_app()
     client = TestClient(app)
 
-    response = client.get("/ready")
+    response = client.get("/health/ready")
 
     assert response.status_code == 503
-    assert "detail" in response.json()
+    data = response.json()
+    assert "error" in data
+    assert data["error"]["code"] == "SERVICE_UNAVAILABLE"
+
+
+def test_request_id_appears_in_logs(capsys: pytest.CaptureFixture[str]) -> None:
+    """Test that every request gets a unique request_id logged."""
+    app = create_app()
+    client = TestClient(app)
+    
+    response = client.post(
+        "/documents",
+        json={"title": "Test", "content": "Body"},
+    )
+    
+    assert response.status_code == 201
+    
+    # Capture stdout/stderr
+    captured = capsys.readouterr()
+    
+    # Verify request_id appears in log output
+    assert "request_id" in captured.out, f"No request_id found in logs:\n{captured.out}"

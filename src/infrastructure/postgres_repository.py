@@ -28,23 +28,29 @@ class PostgresDocumentRepository(DocumentRepository):
         Args:
             document: Document to add
         """
-        model = DocumentModel(
-            id=document.id,
-            title=document.title,
-            content=document.content,
-            status=document.status.value,
-            version=document.version,
-        )
         with self._session_factory() as session:
-            existing = session.get(DocumentModel, document.id)
-            if existing is not None:
-                existing.title = document.title
-                existing.content = document.content
-                existing.status = document.status.value
-                existing.version = document.version
-            else:
-                session.add(model)
-            session.commit()
+            with session.begin():
+                existing = session.get(DocumentModel, document.id)
+                if existing is not None:
+                    # Update existing document
+                    existing.title = document.title
+                    existing.content = document.content
+                    existing.status = document.status.value
+                    existing.version = document.version
+                    existing.created_at = document.created_at
+                    existing.updated_at = document.updated_at
+                else:
+                    # Create new document
+                    model = DocumentModel(
+                        id=document.id,
+                        title=document.title,
+                        content=document.content,
+                        status=document.status.value,
+                        version=document.version,
+                        created_at=document.created_at,
+                        updated_at=document.updated_at,
+                    )
+                    session.add(model)
 
     def get(self, doc_id: UUID) -> Document:
         """Retrieve a document by ID.
@@ -83,10 +89,13 @@ class PostgresDocumentRepository(DocumentRepository):
         Returns:
             Document
         """
-        return Document(
-            id=model.id,
-            title=model.title,
-            content=model.content,
-            status=Status(model.status),
-            version=model.version,
-        )
+        doc = object.__new__(Document)
+        doc.id = model.id
+        doc.title = model.title
+        doc.content = model.content
+        doc.status = Status(model.status)
+        doc.version = model.version
+        doc.created_at = model.created_at
+        doc.updated_at = model.updated_at
+        doc.clock = lambda: model.updated_at
+        return doc

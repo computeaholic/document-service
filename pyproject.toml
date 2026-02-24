@@ -7,6 +7,14 @@ name = "document-service"
 version = "0.1.0"
 description = "Document service"
 requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.111.0",
+  "uvicorn==0.30.1",
+  "pydantic-settings==2.2.1",
+  "sqlalchemy==2.0.30",
+  "psycopg[binary]==3.1.18",
+  "alembic==1.18.4",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -16,11 +24,6 @@ dev = [
   "black==24.4.2",
   "mypy==1.10.0",
   "pre-commit==3.7.1",
-  "fastapi==0.111.0",
-  "uvicorn==0.30.1",
-  "pydantic-settings==2.2.1",
-  "sqlalchemy==2.0.30",
-  "psycopg[binary]==3.1.18",
 ]
 
 [tool.setuptools.packages.find]

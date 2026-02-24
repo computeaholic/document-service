@@ -69,7 +69,9 @@ class DocumentService:
             IllegalTransitionError: If update not allowed in current state
             ValidationError: If title or content validation fails
         """
-        self.get(doc_id).update(title, content)
+        doc = self.get(doc_id)
+        doc.update(title, content)
+        self._repository.add(doc)
 
     def submit(self, doc_id: UUID) -> None:
         """Submit a document for approval.
@@ -82,7 +84,9 @@ class DocumentService:
             IllegalTransitionError: If submit not allowed in current state
             ValidationError: If content is empty
         """
-        self.get(doc_id).submit()
+        doc = self.get(doc_id)
+        doc.submit()
+        self._repository.add(doc)
 
     def approve(self, doc_id: UUID) -> None:
         """Approve a submitted document.
@@ -94,7 +98,9 @@ class DocumentService:
             KeyError: If document not found
             IllegalTransitionError: If approve not allowed in current state
         """
-        self.get(doc_id).approve()
+        doc = self.get(doc_id)
+        doc.approve()
+        self._repository.add(doc)
 
     def reject(self, doc_id: UUID) -> None:
         """Reject a submitted document.
@@ -106,7 +112,9 @@ class DocumentService:
             KeyError: If document not found
             IllegalTransitionError: If reject not allowed in current state
         """
-        self.get(doc_id).reject()
+        doc = self.get(doc_id)
+        doc.reject()
+        self._repository.add(doc)
 
     def list(self) -> Iterable[Document]:
         """List all documents in the repository.

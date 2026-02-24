@@ -14,6 +14,16 @@ class JsonFormatter(logging.Formatter):
             "message": record.getMessage(),
             "logger": record.name,
         }
+        
+        # Include extra fields from LoggerAdapter and extra kwargs
+        for key, value in record.__dict__.items():
+            if key not in ["name", "msg", "args", "created", "filename", "funcName",
+                          "levelname", "levelno", "lineno", "module", "msecs",
+                          "message", "pathname", "process", "processName",
+                          "relativeCreated", "thread", "threadName", "exc_info",
+                          "exc_text", "stack_info", "getMessage"]:
+                log_record[key] = value
+        
         return json.dumps(log_record)
 
 
