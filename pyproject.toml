@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "document-service"
-version = "0.1.0"
+version = "1.0.2"
 description = "Document service"
 requires-python = ">=3.12"
 dependencies = [

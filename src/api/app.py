@@ -1,6 +1,5 @@
 """FastAPI application factory."""
 
-import json
 import logging
 from typing import Annotated, Any, cast
 from uuid import UUID, uuid4
@@ -9,16 +8,16 @@ from fastapi import Depends, FastAPI, Header, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 from application.services import DocumentService
+from domain import IllegalTransitionError, ValidationError, VersionConflictError
 from infrastructure.database import get_session_factory
 from infrastructure.models import DocumentModel, IdempotencyKeyModel
 from infrastructure.postgres_repository import PostgresDocumentRepository
-from domain import IllegalTransitionError, ValidationError
 from config import Settings
 from .logging_config import configure_logging
 from .schemas import CreateDocumentRequest, DocumentResponse, UpdateDocumentRequest
-from .idempotency import check_idempotency, store_idempotency
 
 
 def error_response(code: str, message: str) -> dict[str, Any]:
@@ -161,9 +160,55 @@ def create_app() -> FastAPI:
             content=error_response("illegal_transition", str(exc)),
         )
 
+    @app.exception_handler(VersionConflictError)
+    async def version_conflict_handler(
+        request: Request,
+        exc: VersionConflictError,
+    ) -> JSONResponse:
+        """Handle optimistic concurrency conflicts detected at write time."""
+        request_id = getattr(request.state, "request_id", "unknown")
+        logger.info(
+            "Version conflict",
+            extra={
+                "request_id": request_id,
+                "error_code": "version_conflict",
+                "error_message": str(exc),
+                "status_code": status.HTTP_409_CONFLICT,
+                "method": request.method,
+                "path": request.url.path,
+            },
+        )
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content=error_response("version_conflict", str(exc)),
+        )
+
+    @app.exception_handler(SQLAlchemyError)
+    async def sqlalchemy_exception_handler(
+        request: Request,
+        exc: SQLAlchemyError,
+    ) -> JSONResponse:
+        """Handle database infrastructure failures."""
+        request_id = getattr(request.state, "request_id", "unknown")
+        logger.info(
+            "Database unavailable",
+            extra={
+                "request_id": request_id,
+                "error_code": "db_unavailable",
+                "error_message": str(exc),
+                "status_code": status.HTTP_503_SERVICE_UNAVAILABLE,
+                "method": request.method,
+                "path": request.url.path,
+            },
+        )
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content=error_response("db_unavailable", "Database unavailable"),
+        )
+
     @app.post(
         "/documents",
-        response_model=None,
+        response_model=DocumentResponse,
         status_code=status.HTTP_201_CREATED,
     )
     def create_document(
@@ -175,95 +220,55 @@ def create_app() -> FastAPI:
         """Create a new document.
 
         Args:
-            payload: CreateDocumentRequest with title and content
             idempotency_key: Idempotency-Key header value (required in production)
-            service: DocumentService instance
 
         Returns:
-            DocumentResponse with created document data
-
-        Raises:
-            ValidationError: If title or content validation fails
-            HTTPException: 400 if idempotency key conflict with different request body
+            Created or replayed document data
         """
-        # Check idempotency key (required)
-        request_body = {"title": payload.title, "content": payload.content}
-        try:
-            is_duplicate, stored_response = check_idempotency(
-                idempotency_key, request_body, get_session_factory()
-            )
-
-            if is_duplicate:
-                if stored_response is not None:
-                    # Same key, same hash → return stored response
-                    return JSONResponse(
-                        status_code=status.HTTP_201_CREATED,
-                        content=json.loads(stored_response),
-                    )
-                else:
-                    # Same key, different hash → conflict
-                    request_id = getattr(request.state, "request_id", "unknown")
-                    logger.info(
-                        "Idempotency key conflict",
-                        extra={
-                            "request_id": request_id,
-                            "error_code": "idempotency_key_conflict",
-                            "status_code": status.HTTP_409_CONFLICT,
-                            "method": request.method,
-                            "path": request.url.path,
-                        },
-                    )
-                    return JSONResponse(
-                        status_code=status.HTTP_409_CONFLICT,
-                        content=error_response(
-                            "idempotency_key_conflict",
-                            "Idempotency key already used with different request body",
-                        ),
-                    )
-        except Exception:
-            # Idempotency check failed (e.g., DB unavailable in test mode), proceed anyway
-            base_extra = getattr(request.state, "log_extra", {})
-            logger.warning(
-                "Idempotency check failed; proceeding without cached response",
-                exc_info=True,
-                extra=base_extra,
-            )
-
-        # Execute request
-        doc = service.create(title=payload.title, content=payload.content)
-        base_extra = getattr(request.state, "log_extra", {})
-        logger.info(
-            "Document created",
-            extra={
-                **base_extra,
-                "status_code": status.HTTP_201_CREATED,
-                "document_id": str(doc.id),
-            },
+        result = service.create_idempotent(
+            idempotency_key=idempotency_key,
+            title=payload.title,
+            content=payload.content,
         )
-        response = DocumentResponse.model_validate(doc)
 
-        # Store idempotency record if key provided
-        response_dict = response.model_dump(mode="json")
-        try:
-            store_idempotency(
-                idempotency_key, request_body, response_dict, get_session_factory()
+        if result.outcome == "conflict":
+            request_id = getattr(request.state, "request_id", "unknown")
+            logger.info(
+                "Idempotency key conflict",
+                extra={
+                    "request_id": request_id,
+                    "error_code": "idempotency_key_conflict",
+                    "status_code": status.HTTP_409_CONFLICT,
+                    "method": request.method,
+                    "path": request.url.path,
+                },
             )
-        except Exception:
-            # Failed to store idempotency record (test mode), log and continue
-            base_extra = getattr(request.state, "log_extra", {})
-            logger.warning(
-                "Failed to store idempotency record",
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content=error_response(
+                    "idempotency_key_conflict",
+                    "Idempotency key already used with different request body",
+                ),
+            )
+
+        if result.document is None:
+            raise RuntimeError("Idempotent create completed without a document")
+        base_extra = getattr(request.state, "log_extra", {})
+        if result.outcome == "created":
+            logger.info(
+                "Document created",
                 extra={
                     **base_extra,
                     "status_code": status.HTTP_201_CREATED,
+                    "document_id": str(result.document.id),
                 },
             )
 
-        return response
+        return DocumentResponse.model_validate(result.document)
 
     @app.get(
         "/documents/{doc_id}",
-        response_model=None,
+        response_model=DocumentResponse,
     )
     def get_document(
         request: Request,
@@ -304,7 +309,7 @@ def create_app() -> FastAPI:
 
     @app.put(
         "/documents/{doc_id}",
-        response_model=None,
+        response_model=DocumentResponse,
     )
     def update_document(
         request: Request,
@@ -371,7 +376,7 @@ def create_app() -> FastAPI:
 
     @app.post(
         "/documents/{doc_id}/submit",
-        response_model=None,
+        response_model=DocumentResponse,
     )
     def submit_document(
         request: Request,
@@ -436,7 +441,7 @@ def create_app() -> FastAPI:
 
     @app.post(
         "/documents/{doc_id}/approve",
-        response_model=None,
+        response_model=DocumentResponse,
     )
     def approve_document(
         request: Request,
@@ -501,7 +506,7 @@ def create_app() -> FastAPI:
 
     @app.post(
         "/documents/{doc_id}/reject",
-        response_model=None,
+        response_model=DocumentResponse,
     )
     def reject_document(
         request: Request,

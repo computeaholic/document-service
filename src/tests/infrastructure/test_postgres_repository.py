@@ -3,8 +3,9 @@
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
-from domain import Document, Status
+from domain import Document, Status, VersionConflictError
 from infrastructure.database import get_session_factory
+from infrastructure.models import DocumentModel
 from infrastructure.postgres_repository import PostgresDocumentRepository
 
 
@@ -49,3 +50,21 @@ def test_list_documents_returns_all() -> None:
     ids = {d.id for d in docs}
     assert doc1.id in ids
     assert doc2.id in ids
+
+
+def test_add_raises_version_conflict_when_db_version_has_advanced() -> None:
+    session_factory = _session_factory()
+    repo = PostgresDocumentRepository(session_factory)
+    doc = Document(title="Title", content="Content")
+
+    repo.add(doc)
+    stale_copy = repo.get(doc.id)
+    stale_copy.update("Title 2", "Content 2")
+
+    with session_factory() as session, session.begin():
+        model = session.get(DocumentModel, doc.id)
+        assert model is not None
+        model.version = 1
+
+    with pytest.raises(VersionConflictError):
+        repo.add(stale_copy)
