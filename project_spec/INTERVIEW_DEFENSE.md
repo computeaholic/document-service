@@ -109,23 +109,27 @@ All behaviors are deterministic and test-backed.
 
 Startup:
 
-Start Postgres via docker-compose.
+Run make up.
 
-Run make migrate.
+Compose waits for PostgreSQL health, runs a one-shot migration service with alembic upgrade head, and starts the API only after migration succeeds.
 
-Run make run.
+The FastAPI process itself does not execute migrations.
 
 Migrations:
 
 Managed via Alembic.
 
+Alembic is the sole schema lifecycle authority.
+
 Upgrade and downgrade validated in CI.
+
+Tests use an isolated Postgres database and preserve migrated schema state; running the test suite does not mutate or destroy runtime schema or runtime data.
 
 Health endpoints:
 
 /health/live — process running.
 
-/health/ready — DB connectivity verified.
+/health/ready — DB connectivity and required application schema verified.
 
 Logs during failure:
 
