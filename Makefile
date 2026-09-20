@@ -1,4 +1,4 @@
-.PHONY: help install test test-integration lint format type check clean run up down migrate rollback
+.PHONY: help install test test-integration lint fmt format type typecheck check clean run up down migrate rollback
 
 COMPOSE := docker compose
 TEST_DATABASE_URL ?= postgresql+psycopg://test:test@localhost:5434/document_service_test
@@ -9,9 +9,11 @@ help:
 	@echo "  test     - Run tests with coverage enforcement against the dedicated test database"
 	@echo "  test-integration - Run integration tests against the dedicated test database"
 	@echo "  lint     - Run ruff"
-	@echo "  format   - Run black"
-	@echo "  type     - Run mypy"
-	@echo "  check    - Run lint + type + test"
+	@echo "  fmt      - Run black"
+	@echo "  format   - Alias for fmt"
+	@echo "  typecheck - Run mypy"
+	@echo "  type     - Alias for typecheck"
+	@echo "  check    - Run lint + typecheck + test"
 	@echo "  clean    - Remove build artifacts"
 	@echo "  run      - Run local development server"
 	@echo "  up       - Start docker-compose services"
@@ -50,13 +52,17 @@ test-integration:
 lint:
 	ruff check src
 
-format:
+fmt:
 	black src
 
-type:
+format: fmt
+
+typecheck:
 	mypy src
 
-check: lint type test
+type: typecheck
+
+check: lint typecheck test
 
 clean:
 	rm -rf build dist *.egg-info .pytest_cache .mypy_cache .coverage
