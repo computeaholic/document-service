@@ -4,14 +4,11 @@ import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
 from domain import Document, Status
-from infrastructure.database import Base, get_engine, get_session_factory
+from infrastructure.database import get_session_factory
 from infrastructure.postgres_repository import PostgresDocumentRepository
 
 
 def _session_factory() -> sessionmaker[Session]:
-    engine = get_engine()
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
     return get_session_factory()
 
 

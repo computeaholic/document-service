@@ -1,10 +1,13 @@
 .PHONY: help install test test-integration lint format type check clean run up down migrate rollback
 
+COMPOSE := docker compose
+TEST_DATABASE_URL ?= postgresql+psycopg://test:test@localhost:5434/document_service_test
+
 help:
 	@echo "Available targets:"
 	@echo "  install  - Install project with dev dependencies"
-	@echo "  test     - Run tests with coverage enforcement"
-	@echo "  test-integration - Run integration tests against Dockerized Postgres"
+	@echo "  test     - Run tests with coverage enforcement against the dedicated test database"
+	@echo "  test-integration - Run integration tests against the dedicated test database"
 	@echo "  lint     - Run ruff"
 	@echo "  format   - Run black"
 	@echo "  type     - Run mypy"
@@ -21,12 +24,28 @@ install:
 	pip install .[dev]
 
 test:
-	pytest --cov=src --cov-report=term-missing --cov-fail-under=80
+	@set -eu; \
+	cleanup() { \
+		$(COMPOSE) --profile test stop postgres-test >/dev/null 2>&1 || true; \
+		$(COMPOSE) --profile test rm -fs postgres-test >/dev/null 2>&1 || true; \
+	}; \
+	trap cleanup EXIT INT TERM; \
+	cleanup; \
+	$(COMPOSE) --profile test up -d --wait postgres-test; \
+	DATABASE_URL="$(TEST_DATABASE_URL)" alembic upgrade head; \
+	TEST_DATABASE_URL="$(TEST_DATABASE_URL)" pytest --cov=src --cov-report=term-missing --cov-fail-under=95
 
 test-integration:
-	docker-compose up -d
-	pytest -m integration
-	docker-compose down
+	@set -eu; \
+	cleanup() { \
+		$(COMPOSE) --profile test stop postgres-test >/dev/null 2>&1 || true; \
+		$(COMPOSE) --profile test rm -fs postgres-test >/dev/null 2>&1 || true; \
+	}; \
+	trap cleanup EXIT INT TERM; \
+	cleanup; \
+	$(COMPOSE) --profile test up -d --wait postgres-test; \
+	DATABASE_URL="$(TEST_DATABASE_URL)" alembic upgrade head; \
+	TEST_DATABASE_URL="$(TEST_DATABASE_URL)" pytest -m integration
 
 lint:
 	ruff check src
@@ -46,10 +65,10 @@ run:
 	uvicorn api.app:app --reload --no-access-log
 
 up:
-	docker-compose up -d
+	$(COMPOSE) up -d --wait api
 
 down:
-	docker-compose down
+	$(COMPOSE) --profile test down --remove-orphans
 
 migrate:
 	alembic upgrade head

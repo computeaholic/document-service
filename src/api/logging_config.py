@@ -53,9 +53,14 @@ class JsonFormatter(logging.Formatter):
 def configure_logging() -> None:
     """Configure application logging."""
     handler = logging.StreamHandler(sys.stdout)
+    handler.set_name("document_service_json")
     handler.setFormatter(JsonFormatter())
 
     root = logging.getLogger()
     root.setLevel(logging.INFO)
-    root.handlers.clear()
+    root.handlers = [
+        existing_handler
+        for existing_handler in root.handlers
+        if existing_handler.get_name() != "document_service_json"
+    ]
     root.addHandler(handler)

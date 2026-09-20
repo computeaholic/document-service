@@ -150,20 +150,22 @@ source .venv/bin/activate
 # Install dependencies (includes dev tools)
 pip install -e ".[dev]"
 
-# Start PostgreSQL
+# Start a usable local stack.
+# This brings up the runtime Postgres database,
+# runs Alembic migrations, and starts the API.
 make up
 
-# Run migrations
+# Optional explicit migration command for an already-running runtime database
 make migrate
-
-# Run application
-make run
 ```
 
 ### Testing
 ```bash
-# Run all tests with coverage
-pytest --cov=src --cov-report=term-missing
+# Run all tests with coverage against the dedicated test database
+make test
+
+# Run lint + type + test
+make check
 
 # Type checking
 mypy src
@@ -207,18 +209,29 @@ alembic revision --autogenerate -m "description"
 
 ### Build and Run
 ```bash
-# Start all services (builds on first run)
+# Start the local runtime stack.
+# Compose waits for Postgres health, runs a one-shot migration step,
+# and only then starts the API.
 make up
 
 # Stop all services
 make down
 
 # View logs
-docker-compose logs -f api
+docker compose logs -f api
 ```
 
 ### Environment Variables
-- `DATABASE_URL`: PostgreSQL connection string (default: `postgresql+psycopg://postgres:postgres@db:5432/documents`)
+- `DATABASE_URL`: runtime/development PostgreSQL connection string (default: `postgresql+psycopg://test:test@localhost:5433/document_service`)
+- `TEST_DATABASE_URL`: dedicated test PostgreSQL connection string (default: `postgresql+psycopg://test:test@localhost:5434/document_service_test`)
+
+## Operational Model
+
+- Alembic is the schema lifecycle authority for both runtime and test databases.
+- FastAPI startup does not execute migrations.
+- `make up` uses a one-shot migration container before the API starts.
+- Tests run against a separate test database and clear rows without dropping the migrated schema.
+- Running tests does not modify the runtime database.
 
 ## Operational Guarantees
 

@@ -1,11 +1,13 @@
 """API layer tests."""
 
+import logging
+from collections.abc import Callable
 from types import TracebackType
-from typing import Callable
+from typing import Any
 
-import pytest
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
+from sqlalchemy.exc import ProgrammingError
 
 from api.app import create_app
 
@@ -438,6 +440,8 @@ def test_health_endpoint_returns_ok() -> None:
 def test_readiness_endpoint_returns_ready(monkeypatch: MonkeyPatch) -> None:
     """Test /health/ready returns ready when database is available."""
 
+    executed: list[str] = []
+
     class DummySession:
         def __enter__(self) -> "DummySession":
             return self
@@ -451,7 +455,7 @@ def test_readiness_endpoint_returns_ready(monkeypatch: MonkeyPatch) -> None:
             return None
 
         def execute(self, statement: str) -> None:
-            _ = statement
+            executed.append(str(statement))
 
     def fake_get_session_factory() -> Callable[[], DummySession]:
         return lambda: DummySession()
@@ -464,6 +468,7 @@ def test_readiness_endpoint_returns_ready(monkeypatch: MonkeyPatch) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ready"}
+    assert len(executed) == 2
 
 
 def test_readiness_endpoint_returns_503_on_failure(
@@ -486,9 +491,53 @@ def test_readiness_endpoint_returns_503_on_failure(
     assert data["error"]["code"] == "db_unavailable"
 
 
-def test_request_id_appears_in_logs(capsys: pytest.CaptureFixture[str]) -> None:
-    """Test that every request gets a unique request_id logged."""
+def test_readiness_endpoint_returns_503_when_schema_is_missing(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Test /health/ready returns 503 when the application schema is unavailable."""
+
+    class DummySession:
+        def __enter__(self) -> "DummySession":
+            return self
+
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: TracebackType | None,
+        ) -> None:
+            return None
+
+        def execute(self, statement: str) -> None:
+            raise ProgrammingError(str(statement), {}, Exception("missing table"))
+
+    def fake_get_session_factory() -> Callable[[], DummySession]:
+        return lambda: DummySession()
+
+    monkeypatch.setattr("api.app.get_session_factory", fake_get_session_factory)
     app = create_app()
+    client = TestClient(app)
+
+    response = client.get("/health/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "error": {
+            "code": "db_unavailable",
+            "message": "Database unavailable",
+        }
+    }
+
+
+def test_request_id_appears_in_logs(monkeypatch: MonkeyPatch) -> None:
+    """Test that every request gets a unique request_id logged."""
+    logged_calls: list[dict[str, Any]] = []
+
+    def capture_info(message: str, *args: object, **kwargs: Any) -> None:
+        logged_calls.append({"message": message, "kwargs": kwargs})
+
+    app = create_app()
+    monkeypatch.setattr(logging.getLogger("document_service"), "info", capture_info)
     client = TestClient(app)
 
     response = client.post(
@@ -499,18 +548,20 @@ def test_request_id_appears_in_logs(capsys: pytest.CaptureFixture[str]) -> None:
 
     assert response.status_code == 201
 
-    # Capture stdout/stderr
-    captured = capsys.readouterr()
-
-    # Verify request_id appears in log output
-    assert "request_id" in captured.out, f"No request_id found in logs:\n{captured.out}"
+    assert any(
+        "request_id" in call["kwargs"].get("extra", {}) for call in logged_calls
+    ), "No request_id found in captured logger calls"
 
 
-def test_error_logged_once_with_request_id(capsys: pytest.CaptureFixture[str]) -> None:
+def test_error_logged_once_with_request_id(monkeypatch: MonkeyPatch) -> None:
     """Test that errors are logged exactly once at API boundary with request_id."""
-    import json
+    logged_calls: list[dict[str, Any]] = []
+
+    def capture_info(message: str, *args: object, **kwargs: Any) -> None:
+        logged_calls.append({"message": message, "kwargs": kwargs})
 
     app = create_app()
+    monkeypatch.setattr(logging.getLogger("document_service"), "info", capture_info)
     client = TestClient(app)
 
     # Create document
@@ -521,8 +572,7 @@ def test_error_logged_once_with_request_id(capsys: pytest.CaptureFixture[str]) -
     )
     assert response.status_code == 201
 
-    # Clear captured output
-    capsys.readouterr()
+    logged_calls.clear()
 
     # Trigger ValidationError (empty title after trim)
     update_response = client.post(
@@ -532,20 +582,12 @@ def test_error_logged_once_with_request_id(capsys: pytest.CaptureFixture[str]) -
     )
     assert update_response.status_code == 422
 
-    # Capture logs
-    captured = capsys.readouterr()
-
-    # Parse log lines
-    log_lines = [line for line in captured.out.strip().split("\n") if line]
-    error_logs = []
-
-    for line in log_lines:
-        try:
-            log_entry = json.loads(line)
-            if log_entry.get("error_code") == "validation_error":
-                error_logs.append(log_entry)
-        except json.JSONDecodeError:
-            pass
+    error_logs = [
+        call["kwargs"]["extra"]
+        for call in logged_calls
+        if isinstance(call["kwargs"].get("extra"), dict)
+        and call["kwargs"]["extra"].get("error_code") == "validation_error"
+    ]
 
     # Should have exactly one error log
     assert (

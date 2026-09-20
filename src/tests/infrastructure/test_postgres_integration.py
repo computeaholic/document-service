@@ -22,7 +22,7 @@ def postgres_url() -> str:
     """Get Postgres URL from environment or use default."""
     return os.getenv(
         "TEST_DATABASE_URL",
-        "postgresql+psycopg://test:test@localhost:5433/document_service_test",
+        "postgresql+psycopg://test:test@localhost:5434/document_service_test",
     )
 
 

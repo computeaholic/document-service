@@ -6,6 +6,8 @@ ENV PYTHONUNBUFFERED=1
 
 RUN adduser --disabled-password appuser
 
+COPY alembic.ini .
+COPY migrations ./migrations
 COPY pyproject.toml .
 
 COPY src ./src
