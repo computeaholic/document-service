@@ -2,17 +2,48 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_DB: document_service_test
+      POSTGRES_DB: document_service
       POSTGRES_USER: test
       POSTGRES_PASSWORD: test
     ports:
       - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d document_service"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  postgres-test:
+    image: postgres:16
+    profiles: ["test"]
+    environment:
+      POSTGRES_DB: document_service_test
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+    ports:
+      - "5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d document_service_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://test:test@postgres:5432/document_service
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
 
   api:
     build: .
     environment:
-      DATABASE_URL: postgresql+psycopg://test:test@postgres:5432/document_service_test
+      DATABASE_URL: postgresql+psycopg://test:test@postgres:5432/document_service
     depends_on:
-      - postgres
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "8000:8000"

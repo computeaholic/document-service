@@ -8,10 +8,11 @@ from uuid import UUID, uuid4
 from fastapi import Depends, FastAPI, Header, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
+from sqlalchemy import select
 
 from application.services import DocumentService
 from infrastructure.database import get_session_factory
+from infrastructure.models import DocumentModel, IdempotencyKeyModel
 from infrastructure.postgres_repository import PostgresDocumentRepository
 from domain import IllegalTransitionError, ValidationError
 from config import Settings
@@ -574,7 +575,8 @@ def create_app() -> FastAPI:
         try:
             session_factory = get_session_factory()
             with session_factory() as session:
-                session.execute(text("SELECT 1 FROM documents LIMIT 1"))
+                session.execute(select(DocumentModel.id).limit(1))
+                session.execute(select(IdempotencyKeyModel.id).limit(1))
             return {"status": "ready"}
         except Exception:
             request_id = getattr(request.state, "request_id", "unknown")
