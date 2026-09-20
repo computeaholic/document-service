@@ -334,16 +334,21 @@ No TODO stubs in finished project.
 
 Each repo must provide consistent targets:
 
+make install
 make fmt
 make lint
 make typecheck
 make test
-make test-cov
+make check
 make up
 make down
 make run
 make migrate
 make rollback
+
+If an isolated database-backed integration slice exists, it may also expose:
+
+make test-integration
 
 Rules:
 
@@ -353,15 +358,19 @@ Targets must not depend on undocumented setup.
 
 Targets must be documented in README.
 
-make up starts Postgres via docker-compose.
+For document-service, make up uses Docker Compose to wait for runtime Postgres health, run a one-shot Alembic migration step, and start the API only after migration succeeds.
 
 make run starts the API server.
 
-make migrate applies Alembic upgrade.
+make test uses an isolated test database and preserves migrated schema state.
+
+make check runs lint, type checking, and tests.
+
+make migrate applies Alembic upgrade to the runtime database.
 
 make rollback applies downgrade.
 
-Target names must match across all three repos.
+Target names must conform to this repository's adopted Backend Stack Profile and documented conventions.
 
 11. Version Pinning
 
