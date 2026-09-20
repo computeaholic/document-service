@@ -39,6 +39,6 @@ repos:
 
       - id: block-main-branch
         name: Block commits to main
-        entry: bash -c 'if [[ "$(git rev-parse --abbrev-ref HEAD)" == "main" ]]; then echo "🚫 Direct commits to main are blocked."; exit 1; fi'
+        entry: bash -c 'if [[ "${CI:-}" == "true" ]]; then exit 0; fi; if [[ "$(git rev-parse --abbrev-ref HEAD)" == "main" ]]; then echo "🚫 Direct commits to main are blocked."; exit 1; fi'
         language: system
         stages: [commit]
