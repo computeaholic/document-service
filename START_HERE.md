@@ -1,269 +1,71 @@
-START_HERE — document-service
+# START_HERE — document-service
 
-This repository follows the Project Spec Template discipline.
+For project overview, runtime behavior, and local usage, start with [README.md](README.md).
 
-No implementation begins until specification is complete and frozen.
+This document is for specification navigation, governance context, and repository structure.
 
-This document explains how to navigate and evaluate this repository.
+## 1. Role of This Document
 
-1. Purpose of This Repository
+Use START_HERE.md to understand:
 
-document-service is a deliberately constrained backend service that demonstrates:
+- where the design record lives
+- how the specification documents relate to implementation
+- which governance artifacts are still relevant when evaluating changes
 
-Explicit state modeling
+Do not use this file as the primary product or usage overview.
 
-Explicit failure modeling
+## 2. Design Record Map
 
-Deterministic error handling
+README remains the public front door for current overview, usage, architecture orientation, and operational entry.
 
-Transaction discipline
+Under `project_spec/`, the authority model is split intentionally:
 
-Optimistic concurrency control
+- Frozen normative artifacts:
+  - `project_spec/SPEC_PACK.md` — frozen behavioral contract and scope
+  - `project_spec/FREEZE.md` — formal freeze record
+  - `project_spec/SYNC_LOCK.md` — binding anti-drift boundary contract
+  - `project_spec/BACKEND_STACK_PROFILE.md` — adopted backend stack baseline
+- Living current governance and explanation:
+  - `project_spec/CONSTRAINTS.md`
+  - `project_spec/CONVENTIONS.md`
+  - `project_spec/COPILOT.md`
+  - `project_spec/FAILURE_MODES.md`
+  - `project_spec/GITHUB_WORKFLOW.md`
+  - `project_spec/INTERVIEW_DEFENSE.md`
+  - `project_spec/TRADEOFFS.md`
+- Process records:
+  - `project_spec/PROJECT_INIT_CHECKLIST.md`
+  - `sync message.txt`
 
-Idempotent create semantics
+Frozen does not mean obsolete. These artifacts remain authoritative for the boundaries they define.
 
-Clean architectural boundaries
+## 3. How to Evaluate the Implementation
 
-Mechanical CI enforcement
+If you want to inspect the implementation directly, the shortest useful path is:
 
-It is a bounded system.
+- `src/domain/document.py` — state machine and invariants
+- `src/application/services.py` — use-case orchestration
+- `src/infrastructure/postgres_repository.py` — persistence and database-level version guard
+- `src/api/app.py` — HTTP contract, idempotency handling, readiness, and error mapping
+- `src/tests/api/test_idempotency.py` and `src/tests/infrastructure/test_postgres_integration.py` — observable behavior under replay, versioning, and persistence
 
-It is not a platform, a framework, or a startup foundation.
+## 4. Governance Notes
 
-2. Order of Execution (Binding)
+This repository was built with a spec-first workflow.
 
-No /src directory may exist until the following are complete:
+- implementation is expected to stay inside the frozen scope
+- material changes to contract or architecture require design-record updates before code changes
+- historical freeze records are kept as history, not continuously rewritten status summaries
 
-SPEC_PACK.md completed in full.
+## 5. Repository Boundaries
 
-CONSTRAINTS.md frozen.
+document-service is intentionally limited to a single document workflow and the correctness concerns around it.
 
-CONVENTIONS.md adopted.
+It is not intended as:
 
-FAILURE_MODES.md completed.
+- a general workflow engine
+- a multi-entity platform
+- a startup scaffold
+- a background-processing system
 
-TRADEOFFS.md completed.
-
-INTERVIEW_DEFENSE.md drafted.
-
-SYNC_LOCK.md committed.
-
-FREEZE.md created and committed with commit hash.
-
-Clarity precedes implementation.
-
-3. Canonical Document Map (Authoritative)
-
-The authoritative documentation spine is:
-
-START_HERE.md
-SPEC_PACK.md
-CONSTRAINTS.md
-CONVENTIONS.md
-FAILURE_MODES.md
-TRADEOFFS.md
-INTERVIEW_DEFENSE.md
-SYNC_LOCK.md
-FREEZE.md
-/docs/BACKEND_STACK_PROFILE.md
-
-Important:
-
-State model → SPEC_PACK.md §4
-
-Testing strategy → SPEC_PACK.md §12
-
-Operational considerations → SPEC_PACK.md §14
-
-Specification artifacts may be grouped under /project_spec/ to reduce repository root clutter. START_HERE.md must remain at repository root.
-
-4. Scope Guard
-
-Scope is defined in:
-
-SPEC_PACK.md §2
-
-SYNC_LOCK.md
-
-TRADEOFFS.md §2
-
-Out-of-scope items are deliberate.
-
-No feature expansion is permitted without:
-
-Updating SPEC_PACK.md
-
-Updating TRADEOFFS.md
-
-Updating FREEZE.md
-
-Recording new commit hash
-
-No silent expansion.
-
-5. Stack Profile
-
-This repository inherits Backend Stack Profile v1.0.
-
-See:
-
-/docs/BACKEND_STACK_PROFILE.md
-
-The following are frozen unless re-freeze occurs:
-
-Python 3.12
-
-FastAPI
-
-Pydantic v2
-
-SQLAlchemy 2.x
-
-PostgreSQL
-
-Alembic
-
-pytest (80–85% coverage)
-
-ruff / black / mypy
-
-GitHub Actions
-
-Docker + docker-compose
-
-No silent dependency drift.
-
-6. Structural Discipline
-
-Required structure:
-
-/src
-  api/
-  services/
-  domain/
-  infrastructure/
-  config/
-  main.py
-
-/tests
-Makefile
-pyproject.toml
-Dockerfile
-docker-compose.yml
-.pre-commit-config.yaml
-.github/workflows/ci.yml
-
-Rules:
-
-No dumping-ground folders.
-
-No circular dependencies.
-
-Dependency direction: api → services → domain.
-
-Domain is framework-agnostic.
-
-All mutations use explicit transaction boundaries.
-
-See CONVENTIONS.md.
-
-7. Failure Discipline
-
-All failures are defined in:
-
-FAILURE_MODES.md
-
-Every failure includes:
-
-Detection layer
-
-HTTP response
-
-Error code
-
-Log level
-
-Retry strategy
-
-Idempotency behavior
-
-If a failure is not documented, it is a design defect.
-
-8. Freeze Protocol
-
-Before implementation:
-
-All spec documents must be complete.
-
-FREEZE.md must contain:
-
-Freeze date
-
-Version
-
-Commit hash
-
-After freeze:
-
-No new endpoints
-
-No new entities
-
-No dependency additions
-
-No transaction model changes
-
-No state model changes
-
-Ambiguity discovered during implementation requires:
-
-Stop → Update docs → Re-freeze.
-
-9. Evaluation Criteria
-
-This repository is evaluated on:
-
-Determinism
-
-Constraint discipline
-
-Correct state enforcement
-
-Concurrency safety
-
-Idempotency correctness
-
-Failure modeling completeness
-
-Transaction atomicity
-
-Operational clarity
-
-Clean CI enforcement
-
-Not on feature breadth.
-
-10. How to Begin (After Freeze)
-
-After FREEZE commit:
-
-make up
-make migrate
-make run
-make test
-
-A clean clone must allow this without undocumented steps.
-
-11. Boundary Reminder
-
-This repository applies only to document-service.
-
-No assumptions are imported from other repositories.
-
-All decisions are local to this system.
-
-No cross-repo coupling.
-
-Clarity first.
-Constraints first.
-Then code.
+The narrow scope is deliberate and documented in `project_spec/TRADEOFFS.md`.

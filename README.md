@@ -1,375 +1,190 @@
-# Document Service
+# document-service
 
-Production-grade REST API for document lifecycle management with strict concurrency controls and operational guarantees.
+A FastAPI/PostgreSQL service implementing a controlled document approval workflow, designed around explicit state transitions, idempotent creation, optimistic concurrency, explicit transaction boundaries, deterministic failure behavior, and migration-owned schema lifecycle.
+
+- Python 3.12
+- FastAPI
+- PostgreSQL
+- SQLAlchemy 2.x
+- Alembic
+- Docker Compose
+- strict mypy
+- CI-backed integration testing
+- coverage gate >=95%
+
+## Why This Service Exists
+
+This repository is intentionally narrow. It focuses on correctness for stateful writes rather than feature breadth.
+
+Document states:
+
+```text
+draft -> submitted -> approved
+                  -> rejected
+```
+
+`approved` and `rejected` are terminal. The interesting parts of the implementation are the controls around how a document gets there: state-machine enforcement, conditional updates, idempotent creation, explicit persistence boundaries, and deterministic API errors.
 
 ## Architecture
 
-**Domain-Driven Design** with strict layer separation:
-- **Domain**: Pure business logic (`Document` aggregate, state transitions)
-- **Application**: Service layer and repository interfaces
-- **Infrastructure**: Persistence implementations (in-memory, PostgreSQL)
-- **API**: FastAPI HTTP interface with error envelope, middleware, OpenAPI
-
-**Key Components**:
-- **Error Envelope**: Uniform `{"error": {"code": "...", "message": "..."}}` across all 4xx/5xx responses
-- **Concurrency Control**: Optimistic locking via `If-Match` header (required for PUT)
-- **Idempotency**: `Idempotency-Key` header required on POST
-- **Structured Logging**: JSON logs with `request_id`, `method`, `path`, `status_code`, `error_code`
-- **Health Endpoints**: `/health/live` (always 200), `/health/ready` (validates DB connection)
-
-## API Contract
-
-### Document States
-```
-draft → submitted → approved
-     ↓
-  rejected
+```mermaid
+flowchart TD
+    Client --> API["FastAPI boundary\nsrc/api/app.py"]
+    API --> Service["DocumentService\nsrc/application/services.py"]
+    Service --> Domain["Document state machine\nsrc/domain/document.py"]
+    Service --> RepoAbstraction["DocumentRepository"]
+    RepoAbstraction --> Repo["PostgresDocumentRepository\nsrc/infrastructure/postgres_repository.py"]
+    Repo --> ORM["SQLAlchemy models and sessions"]
+    ORM --> RuntimeDB[("PostgreSQL runtime DB")]
+    Alembic["Alembic migrations"] --> RuntimeDB
+    Tests["pytest and integration tests"] --> TestDB[("isolated PostgreSQL test DB")]
 ```
 
-**Immutable Rules**:
-- `draft` can transition to `submitted`
-- `submitted` can transition to `approved` or `rejected`
-- `approved` is terminal (no transitions allowed)
-- `rejected` is terminal (no transitions allowed)
+- Dependency direction is `api -> application -> domain`.
+- The domain model is framework-agnostic and owns state legality.
+- Persistence is behind a repository abstraction, with the Postgres implementation enforcing a second version check at the database write.
+- Alembic owns schema lifecycle for both runtime and test databases.
+- Tests run against a separate Postgres instance and clean rows without dropping the migrated schema.
 
-### Endpoints
+## Correctness Contracts
 
-#### POST /documents
-**Request**:
-```json
-{
-  "title": "string (1-200 chars)",
-  "content": "string (0-20000 chars)"
-}
-```
-**Response** (201):
-```json
-{
-  "id": "uuid",
-  "title": "string",
-  "content": "string",
-  "status": "draft",
-  "version": 0,
-  "created_at": "ISO8601",
-  "updated_at": "ISO8601"
-}
-```
-**Idempotency**: Include `Idempotency-Key: <uuid>` header to ensure exactly-once processing.
+| Concern | Mechanism | Observable behavior |
+| --- | --- | --- |
+| State legality | Domain transition methods on `Document` | Illegal transitions return `400 illegal_transition` |
+| Idempotent create | `Idempotency-Key` plus persisted request hash | Same key/body replays `201`; same key/different body returns `409` |
+| Lost-update protection | `If-Match`, integer version, and repository-side `WHERE version = ...` guard | Stale version returns `409 version_conflict` |
+| Explicit persistence boundaries | `session.begin()` in repository and idempotency persistence writes | Mutating writes are explicit, not implicit autocommit |
+| Schema lifecycle | Alembic migrations plus a one-shot `migrate` service in Compose | `make up` migrates before the API starts |
+| Readiness | Queries against both required tables | DB unavailable or missing schema returns `503 db_unavailable` |
+| Test isolation | Dedicated `postgres-test` database plus row cleanup only | `make check` does not remove runtime tables or runtime data |
 
-#### GET /documents/{id}
-**Response** (200):
-```json
-{
-  "id": "uuid",
-  "title": "string",
-  "content": "string",
-  "status": "draft|submitted|approved|rejected",
-  "version": 1,
-  "created_at": "ISO8601",
-  "updated_at": "ISO8601"
-}
-```
+## API
 
-#### PUT /documents/{id}
-**Headers** (REQUIRED):
-- `If-Match: <version>` - Optimistic lock version
+| Method | Path | Purpose | Required headers |
+| --- | --- | --- | --- |
+| `POST` | `/documents` | Create a draft document | `Idempotency-Key` |
+| `GET` | `/documents/{doc_id}` | Retrieve a document | none |
+| `PUT` | `/documents/{doc_id}` | Update a draft document | `If-Match` |
+| `POST` | `/documents/{doc_id}/submit` | Transition `draft -> submitted` | `If-Match` |
+| `POST` | `/documents/{doc_id}/approve` | Transition `submitted -> approved` | `If-Match` |
+| `POST` | `/documents/{doc_id}/reject` | Transition `submitted -> rejected` | `If-Match` |
+| `GET` | `/health/live` | Liveness check | none |
+| `GET` | `/health/ready` | Readiness check | none |
 
-**Request**:
-```json
-{
-  "title": "string (1-200 chars)",
-  "content": "string (0-20000 chars)"
-}
-```
-**Response** (200): Same as GET
+Generated API documentation is available at `http://127.0.0.1:8000/docs` after the service is running.
 
-**Errors**:
-- `409 version_conflict`: If-Match version mismatch (concurrent modification)
-- `422 validation_error`: Invalid field values
-- `400 illegal_transition`: Invalid state transition
-
-#### POST /documents/{id}/submit
-Transitions a document from `draft` → `submitted`.
-
-**Headers** (REQUIRED):
-- `If-Match: <version>`
-
-**Response** (200): Same as GET
-
-**Errors**:
-- `409 version_conflict`
-- `422 validation_error` (content must be non-empty on submit)
-- `400 illegal_transition`
-
-#### POST /documents/{id}/approve
-Transitions a document from `submitted` → `approved`.
-
-**Headers** (REQUIRED):
-- `If-Match: <version>`
-
-**Response** (200): Same as GET
-
-**Errors**:
-- `409 version_conflict`
-- `400 illegal_transition`
-
-#### POST /documents/{id}/reject
-Transitions a document from `submitted` → `rejected`.
-
-**Headers** (REQUIRED):
-- `If-Match: <version>`
-
-**Response** (200): Same as GET
-
-**Errors**:
-- `409 version_conflict`
-- `400 illegal_transition`
-
-### Error Codes
-- `validation_error` (422): Pydantic validation failure
-- `illegal_transition` (400): Invalid document state transition
-- `not_found` (404): Document does not exist
-- `version_conflict` (409): If-Match version conflict
-- `idempotency_key_conflict` (409): Same idempotency key with different payload
-- `db_conflict` (409): Database constraint conflict
-- `db_unavailable` (503): Database connectivity failure
-
-## Local Development
-
-### Prerequisites
-- Python 3.12+
-- Docker & Docker Compose (for PostgreSQL)
-- make
-
-### Setup
-```bash
-# Create virtual environment
-python3.12 -m venv .venv
-source .venv/bin/activate
-
-# Install dependencies (includes dev tools)
-pip install -e ".[dev]"
-
-# Start a usable local stack.
-# This brings up the runtime Postgres database,
-# runs Alembic migrations, and starts the API.
-make up
-
-# Optional explicit migration command for an already-running runtime database
-make migrate
-```
-
-### Testing
-```bash
-# Run all tests with coverage against the dedicated test database
-make test
-
-# Run lint + type + test
-make check
-
-# Type checking
-mypy src
-
-# Linting
-ruff check src
-```
-
-## Database Migrations
-
-### Commands
-```bash
-# Apply all pending migrations
-make migrate
-
-# Rollback last migration
-make rollback
-
-# Create new migration (after modifying models)
-alembic revision --autogenerate -m "description"
-```
-
-### Schema
-**documents table**:
-- `id` (UUID, PK)
-- `title` (VARCHAR(200))
-- `content` (TEXT)
-- `status` (VARCHAR(20))
-- `version` (INTEGER)
-- `created_at` (TIMESTAMP)
-- `updated_at` (TIMESTAMP)
-
-**idempotency_keys table**:
-- `id` (UUID, PK)
-- `key` (VARCHAR(255), UNIQUE)
-- `request_hash` (VARCHAR(64))
-- `response_body` (TEXT)
-- `created_at` (TIMESTAMP)
-
-## Docker Deployment
-
-### Build and Run
-```bash
-# Start the local runtime stack.
-# Compose waits for Postgres health, runs a one-shot migration step,
-# and only then starts the API.
-make up
-
-# Stop all services
-make down
-
-# View logs
-docker compose logs -f api
-```
-
-### Environment Variables
-- `DATABASE_URL`: runtime/development PostgreSQL connection string (default: `postgresql+psycopg://test:test@localhost:5433/document_service`)
-- `TEST_DATABASE_URL`: dedicated test PostgreSQL connection string (default: `postgresql+psycopg://test:test@localhost:5434/document_service_test`)
-
-## Operational Model
-
-- Alembic is the schema lifecycle authority for both runtime and test databases.
-- FastAPI startup does not execute migrations.
-- `make up` uses a one-shot migration container before the API starts.
-- Tests run against a separate test database and clear rows without dropping the migrated schema.
-- Running tests does not modify the runtime database.
-
-## Operational Guarantees
-
-1. **Concurrency Safety**: All document mutations protected by optimistic locking (version counter)
-2. **Idempotency**: POST requests with `Idempotency-Key` return cached response within 24h window
-3. **Audit Trail**: `created_at` and `updated_at` timestamps on all entities
-4. **Request Tracing**: Every request tagged with unique `request_id` UUID in logs
-5. **Migration Integrity**: CI enforces bidirectional migration tests (upgrade/downgrade/upgrade)
-6. **Error Isolation**: Exceptions logged once at API boundary (no duplicate logs in domain/repository)
-
-## Idempotency Guarantees
-
-The service implements idempotency for document creation via the `Idempotency-Key` header:
-
-**Same key + same body → Replayed response**
-```bash
-# First request
-POST /documents
-Idempotency-Key: abc-123
-{"title": "Doc", "content": "Content"}
-→ 201 {"id": "uuid-1", "version": 1, ...}
-
-# Replay with same key and body
-POST /documents
-Idempotency-Key: abc-123
-{"title": "Doc", "content": "Content"}
-→ 201 {"id": "uuid-1", "version": 1, ...}  # Same response, no new document
-```
-
-**Same key + different body → 409 Conflict**
-```bash
-# First request
-POST /documents
-Idempotency-Key: abc-123
-{"title": "Doc A", "content": "..."}
-→ 201 Created
-
-# Different payload with same key
-POST /documents
-Idempotency-Key: abc-123
-{"title": "Doc B", "content": "..."}
-→ 409 {"error": {"code": "idempotency_key_conflict", ...}}
-```
-
-**Implementation Details**:
-- Idempotency keys stored with SHA-256 hash of request body
-- Key reuse with different payload rejected to prevent silent data loss
-- Cached responses valid indefinitely (24-hour TTL recommended for production cleanup)
-
-## Optimistic Concurrency
-
-All document updates require the `If-Match` header with current version:
+Create example:
 
 ```bash
-# Get current version
-GET /documents/{id}
-→ 200 {"version": 5, ...}
-
-# Update with version check
-PUT /documents/{id}
-If-Match: 5
-{"title": "Updated", ...}
-→ 200 {"version": 6, ...}
-
-# Concurrent update with stale version fails
-PUT /documents/{id}
-If-Match: 5  # Stale
-{"title": "Another update", ...}
-→ 409 {"error": {"code": "version_conflict", ...}}
+curl -X POST http://127.0.0.1:8000/documents \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: create-doc-1' \
+  -d '{"title":"Quarterly Report","content":"Initial draft"}'
 ```
 
-**Enforcement Layers**:
-1. **Application Layer**: Service validates version before mutation
-2. **Database Layer**: UPDATE with WHERE version={expected} prevents race conditions
-3. **API Layer**: Missing `If-Match` header → 422 validation_error
+Conditional mutation example:
 
-**Why Optimistic Locking**:
-- No distributed locks required (horizontal scaling friendly)
-- Explicit conflict detection (callers handle retry logic)
-- Version counter doubles as audit trail
+```bash
+DOC_ID="<id returned by POST /documents>"
 
-## Error Envelope
+curl -X PUT "http://127.0.0.1:8000/documents/$DOC_ID" \
+  -H 'Content-Type: application/json' \
+  -H 'If-Match: 0' \
+  -d '{"title":"Quarterly Report v2","content":"Revised draft"}'
+```
 
-All 4xx/5xx responses use uniform error structure:
+## Error Contract
+
+Modeled application errors use this envelope:
 
 ```json
 {
   "error": {
-    "code": "ERROR_CODE",
-    "message": "Human-readable description"
+    "code": "...",
+    "message": "..."
   }
 }
 ```
 
-**Error Codes**:
-- `validation_error` (422): Pydantic validation failure (empty title, content too long, etc.)
-- `illegal_transition` (400): Invalid state transition (e.g., draft → approved)
-- `not_found` (404): Document does not exist
-- `version_conflict` (409): If-Match version mismatch
-- `idempotency_key_conflict` (409): Same idempotency key with different payload
-- `db_unavailable` (503): Database connectivity failure
+| HTTP | `error.code` | When it appears |
+| --- | --- | --- |
+| `422` | `validation_error` | Request validation fails or domain validation fails |
+| `400` | `illegal_transition` | A state transition is not legal in the current document state |
+| `404` | `not_found` | The target document does not exist |
+| `409` | `version_conflict` | `If-Match` does not match the current version |
+| `409` | `idempotency_key_conflict` | An idempotency key is reused with a different request body |
+| `503` | `db_unavailable` | Readiness fails because the database or required schema is unavailable |
 
-**Logging Discipline**:
-- Domain layer: Zero logging (pure business logic)
-- Repository layer: Zero logging (infrastructure concern)
-- API layer: Log errors **once** at boundary with `request_id`, `error_code`, `message`
+## Running Locally
+
+Preferred path:
+
+```bash
+make install
+make up
+```
+
+`make up` produces a usable local stack:
+
+1. runtime Postgres starts
+2. Postgres health passes
+3. Alembic migration succeeds
+4. API starts
+
+Health check:
+
+```bash
+curl http://127.0.0.1:8000/health/live
+curl http://127.0.0.1:8000/health/ready
+```
+
+Stop the stack:
+
+```bash
+make down
+```
+
+The default runtime database is `document_service` on port `5433`. The dedicated test database is `document_service_test` on port `5434`.
+
+## Validation
+
+Normal engineering gate:
+
+```bash
+make check
+```
+
+`make check` runs:
+
+- `ruff check src`
+- `mypy src` in strict mode
+- the full pytest suite against the dedicated test database
+- Alembic upgrade of the test database before tests
+- coverage enforcement at `>=95%`
+
+v1.0.1 verification:
+
+- 64 tests
+- 98.07% coverage
+- runtime document survived complete `make check` execution
+- migration upgrade/downgrade verification
+
+## Design Record
+
+- [project_spec/SPEC_PACK.md](project_spec/SPEC_PACK.md) — behavioral contract and frozen scope
+- [project_spec/TRADEOFFS.md](project_spec/TRADEOFFS.md) — rejected alternatives and intentional limits
+- [project_spec/INTERVIEW_DEFENSE.md](project_spec/INTERVIEW_DEFENSE.md) — concise architecture-review rationale
+
+The service was specified before implementation, and implementation changes were reconciled against that contract rather than documented ad hoc.
 
 ## Non-Goals
 
-This service explicitly **does not** implement:
+- authentication / RBAC
+- background jobs
+- notifications
+- caching
+- search
+- event sourcing
+- horizontal or distributed coordination
 
-- **Distributed Locking**: Optimistic concurrency sufficient for expected load
-- **Horizontal Idempotency Store**: Single Postgres table adequate for scale target
-- **Async Processing**: Synchronous HTTP sufficient for <100ms p99 latency
-- **Soft Deletes**: Hard deletes enforce data lifecycle (GDPR compliance)
-- **Multi-Tenancy**: Single-tenant deployment model
-- **Event Sourcing**: State snapshots with version counter sufficient
-- **CQRS**: Read/write separation unnecessary for current complexity
-
-Senior reviewers respect these boundaries. Scope expansion requires spec revision.
-
-## CI/CD
-
-GitHub Actions workflow enforces:
-- Ruff linting (zero violations)
-- Mypy type checking (strict mode)
-- pytest with ≥80% coverage (currently 96%)
-- Alembic migration smoke tests (forward + backward + forward)
-
-## Governance
-
-This repository is under **FREEZE** governance. See [FREEZE.md](FREEZE.md) for scope boundaries and architectural rules.
-
-## Release Integrity
-
-- Release: `v1.0.0`
-- Commit: `d7be00d`
-- Coverage: `98.5%`
-- Migrations: verified (upgrade/downgrade cycle)
-- Pre-commit hooks: green (`black`, `ruff`, `mypy`, `bandit`, `trufflehog`)
-- CI: passing
+These are scope boundaries for a deliberately bounded service, not deferred roadmap promises.
