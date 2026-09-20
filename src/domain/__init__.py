@@ -4,11 +4,12 @@ Exports domain types for easy imports in tests and other modules.
 """
 
 from .document import Document, Status
-from .exceptions import IllegalTransitionError, ValidationError
+from .exceptions import IllegalTransitionError, ValidationError, VersionConflictError
 
 __all__ = [
     "Document",
     "Status",
     "IllegalTransitionError",
     "ValidationError",
+    "VersionConflictError",
 ]

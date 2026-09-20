@@ -3,10 +3,10 @@
 Orchestrates document use cases without business logic duplication.
 """
 
+from application.repositories import DocumentRepository, IdempotentCreateResult
 from typing import Iterable
 from uuid import UUID
 
-from application.repositories import DocumentRepository
 from domain import Document
 
 
@@ -41,6 +41,15 @@ class DocumentService:
         doc = Document(title=title, content=content)
         self._repository.add(doc)
         return doc
+
+    def create_idempotent(
+        self,
+        idempotency_key: str,
+        title: str,
+        content: str,
+    ) -> IdempotentCreateResult:
+        """Atomically create or replay a document for an idempotency key."""
+        return self._repository.create_idempotent(idempotency_key, title, content)
 
     def get(self, doc_id: UUID) -> Document:
         """Retrieve a document by ID.

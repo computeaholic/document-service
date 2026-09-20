@@ -7,9 +7,13 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
+from sqlalchemy import update as sql_update
 from sqlalchemy.exc import ProgrammingError
 
 from api.app import create_app
+from domain import Document
+from infrastructure.models import DocumentModel
+from infrastructure.postgres_repository import PostgresDocumentRepository
 
 
 def test_create_document_returns_201_with_id_and_status() -> None:
@@ -600,3 +604,87 @@ def test_error_logged_once_with_request_id(monkeypatch: MonkeyPatch) -> None:
     assert "error_code" in error_log, "error_code missing from error log"
     assert error_log["error_code"] == "validation_error"
     assert error_log["status_code"] == 422
+
+
+def test_update_document_db_level_version_race_returns_409(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A write-time CAS miss must return version_conflict instead of leaking 500."""
+
+    class RacingRepository(PostgresDocumentRepository):
+        race_injected = False
+
+        def add(self, document: Document) -> None:
+            if not self.race_injected and document.version > 0:
+                self.race_injected = True
+                with self._session_factory() as session, session.begin():
+                    session.execute(
+                        sql_update(DocumentModel)
+                        .where(DocumentModel.id == document.id)
+                        .where(DocumentModel.version == document.version - 1)
+                        .values(
+                            title="Concurrent winner",
+                            content="Concurrent content",
+                            status=document.status.value,
+                            version=document.version,
+                            updated_at=document.updated_at,
+                        )
+                    )
+            super().add(document)
+
+    monkeypatch.setattr("api.app.PostgresDocumentRepository", RacingRepository)
+
+    app = create_app()
+    client = TestClient(app)
+    create_response = client.post(
+        "/documents",
+        json={"title": "Original", "content": "Original content"},
+        headers={"Idempotency-Key": "db-race-version-conflict"},
+    )
+    doc_id = create_response.json()["id"]
+
+    response = client.put(
+        f"/documents/{doc_id}",
+        json={"title": "Updated", "content": "Updated content"},
+        headers={"If-Match": "0"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "version_conflict"
+
+
+def test_openapi_documents_success_responses_reference_document_response() -> None:
+    """Document endpoints should expose DocumentResponse in OpenAPI success schemas."""
+    schema_ref = "#/components/schemas/DocumentResponse"
+    paths = create_app().openapi()["paths"]
+
+    assert (
+        paths["/documents"]["post"]["responses"]["201"]["content"]["application/json"][
+            "schema"
+        ]["$ref"]
+        == schema_ref
+    )
+    assert (
+        paths["/documents/{doc_id}"]["get"]["responses"]["200"]["content"][
+            "application/json"
+        ]["schema"]["$ref"]
+        == schema_ref
+    )
+    assert (
+        paths["/documents/{doc_id}"]["put"]["responses"]["200"]["content"][
+            "application/json"
+        ]["schema"]["$ref"]
+        == schema_ref
+    )
+    for action in ("submit", "approve", "reject"):
+        assert (
+            paths[f"/documents/{{doc_id}}/{action}"]["post"]["responses"]["200"][
+                "content"
+            ]["application/json"]["schema"]["$ref"]
+            == schema_ref
+        )
+
+
+def test_openapi_reports_application_version() -> None:
+    """OpenAPI metadata should expose the current application version."""
+    assert create_app().openapi()["info"]["version"] == "1.0.2"

@@ -7,3 +7,7 @@ class IllegalTransitionError(Exception):
 
 class ValidationError(Exception):
     """Raised when domain validation fails (e.g. empty content on submit)."""
+
+
+class VersionConflictError(Exception):
+    """Raised when a concurrent write wins between read and persisted update."""
